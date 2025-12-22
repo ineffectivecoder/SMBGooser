@@ -2,8 +2,10 @@ package smb
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/ineffectivecoder/SMBGooser/internal/encoding"
 	"github.com/ineffectivecoder/SMBGooser/pkg/smb/types"
@@ -400,4 +402,62 @@ func (f *File) GetSecurityDescriptor(ctx context.Context) ([]byte, error) {
 	}
 
 	return queryResp[dataStart : dataStart+int(outputLength)], nil
+}
+
+// SetTimes sets the file timestamps (timestomping)
+// Pass nil for any time you don't want to change
+func (f *File) SetTimes(created, accessed, modified *time.Time) error {
+	// Build FILE_BASIC_INFORMATION structure (40 bytes)
+	// CreationTime (8), LastAccessTime (8), LastWriteTime (8), ChangeTime (8), FileAttributes (4)
+	info := make([]byte, 40)
+
+	if created != nil {
+		binary.LittleEndian.PutUint64(info[0:8], timeToFiletime(*created))
+	}
+	if accessed != nil {
+		binary.LittleEndian.PutUint64(info[8:16], timeToFiletime(*accessed))
+	}
+	if modified != nil {
+		binary.LittleEndian.PutUint64(info[16:24], timeToFiletime(*modified))
+		// ChangeTime typically matches LastWriteTime
+		binary.LittleEndian.PutUint64(info[24:32], timeToFiletime(*modified))
+	}
+	// FileAttributes = 0 means don't change
+	binary.LittleEndian.PutUint32(info[32:36], 0)
+
+	// Build SET_INFO request
+	// InfoType = 0x01 (File), FileInfoClass = 0x04 (FileBasicInformation)
+	req := types.NewSetInfoRequest(f.fileID, 0x01, 0x04, info)
+
+	// Build header
+	header := types.NewHeader(types.CommandSetInfo, f.tree.session.nextMessageID())
+	header.SessionID = f.tree.session.sessionID
+	header.TreeID = f.tree.treeID
+
+	// Send request
+	resp, err := f.tree.session.sendRecv(header, req.Marshal())
+	if err != nil {
+		return fmt.Errorf("set info failed: %w", err)
+	}
+
+	// Parse response header
+	var respHeader types.Header
+	if err := respHeader.Unmarshal(resp[:types.SMB2HeaderSize]); err != nil {
+		return fmt.Errorf("failed to parse response header: %w", err)
+	}
+
+	// Check status
+	if !respHeader.Status.IsSuccess() {
+		return StatusToError(respHeader.Status)
+	}
+
+	return nil
+}
+
+// timeToFiletime converts Go time to Windows FILETIME
+func timeToFiletime(t time.Time) uint64 {
+	// FILETIME is 100-nanosecond intervals since January 1, 1601
+	const windowsEpochDiff = 116444736000000000 // 100-ns intervals from 1601 to 1970
+	unixNano := t.UnixNano()
+	return uint64(unixNano/100) + windowsEpochDiff
 }

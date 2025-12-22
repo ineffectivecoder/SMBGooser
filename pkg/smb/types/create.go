@@ -346,3 +346,44 @@ func (r *QueryInfoRequest) Marshal() []byte {
 	copy(buf[24:40], r.FileID.Marshal())
 	return buf
 }
+
+// SetInfoRequest represents an SMB2 SET_INFO request
+type SetInfoRequest struct {
+	StructureSize  uint16 // 33
+	InfoType       uint8
+	FileInfoClass  uint8
+	BufferLength   uint32
+	BufferOffset   uint16
+	Reserved       uint16
+	AdditionalInfo uint32
+	FileID         FileID
+	Buffer         []byte
+}
+
+// NewSetInfoRequest creates a SET_INFO request
+func NewSetInfoRequest(fileID FileID, infoType, infoClass uint8, buffer []byte) *SetInfoRequest {
+	return &SetInfoRequest{
+		StructureSize: 33,
+		InfoType:      infoType,
+		FileInfoClass: infoClass,
+		BufferLength:  uint32(len(buffer)),
+		BufferOffset:  SMB2HeaderSize + 32, // Fixed header is 32 bytes
+		FileID:        fileID,
+		Buffer:        buffer,
+	}
+}
+
+// Marshal serializes the SET_INFO request
+func (r *SetInfoRequest) Marshal() []byte {
+	buf := make([]byte, 32+len(r.Buffer))
+	encoding.PutUint16LE(buf[0:2], r.StructureSize)
+	buf[2] = r.InfoType
+	buf[3] = r.FileInfoClass
+	encoding.PutUint32LE(buf[4:8], r.BufferLength)
+	encoding.PutUint16LE(buf[8:10], r.BufferOffset)
+	encoding.PutUint16LE(buf[10:12], r.Reserved)
+	encoding.PutUint32LE(buf[12:16], r.AdditionalInfo)
+	copy(buf[16:32], r.FileID.Marshal())
+	copy(buf[32:], r.Buffer)
+	return buf
+}

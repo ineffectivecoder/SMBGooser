@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/ineffectivecoder/SMBGooser/pkg/smb/types"
@@ -318,20 +319,39 @@ func cmdGet(ctx context.Context, args []string) error {
 		return fmt.Errorf("not connected to a share")
 	}
 	if len(args) < 1 {
-		return fmt.Errorf("usage: get <remote> [local]")
+		return fmt.Errorf("usage: get [-r] <remote> [local]")
 	}
 
-	remotePath := resolvePath(args[0])
-	localPath := args[0]
-	if len(args) > 1 {
-		localPath = args[1]
-	}
-	// Use just the filename if no local path specified
-	if !strings.Contains(localPath, "/") && !strings.Contains(localPath, "\\") {
-		parts := strings.Split(remotePath, "\\")
-		localPath = parts[len(parts)-1]
+	// Parse flags
+	recursive := false
+	filteredArgs := make([]string, 0)
+	for _, arg := range args {
+		if arg == "-r" || arg == "--recursive" {
+			recursive = true
+		} else {
+			filteredArgs = append(filteredArgs, arg)
+		}
 	}
 
+	if len(filteredArgs) < 1 {
+		return fmt.Errorf("usage: get [-r] <remote> [local]")
+	}
+
+	remotePath := resolvePath(filteredArgs[0])
+	localPath := filepath.Base(remotePath)
+	if len(filteredArgs) > 1 {
+		localPath = filteredArgs[1]
+	}
+
+	if recursive {
+		return downloadRecursive(ctx, remotePath, localPath)
+	}
+
+	return downloadFile(ctx, remotePath, localPath)
+}
+
+// downloadFile downloads a single file
+func downloadFile(ctx context.Context, remotePath, localPath string) error {
 	info_("Downloading %s -> %s", remotePath, localPath)
 
 	file, err := currentTree.OpenFile(ctx, remotePath, types.GenericRead, types.FileOpen)
@@ -360,6 +380,73 @@ func cmdGet(ctx context.Context, args []string) error {
 	}
 
 	success_("Downloaded %s (%s)", localPath, formatSize(total))
+	return nil
+}
+
+// downloadRecursive downloads a directory and all its contents
+func downloadRecursive(ctx context.Context, remotePath, localPath string) error {
+	info_("Downloading directory %s -> %s", remotePath, localPath)
+
+	// Create local directory
+	if err := os.MkdirAll(localPath, 0755); err != nil {
+		return fmt.Errorf("failed to create directory: %v", err)
+	}
+
+	// List remote directory
+	files, err := currentTree.ListDirectory(ctx, remotePath)
+	if err != nil {
+		return fmt.Errorf("failed to list directory: %v", err)
+	}
+
+	fileCount := 0
+	dirCount := 0
+
+	for _, f := range files {
+		remoteFile := remotePath + "\\" + f.Name
+		localFile := filepath.Join(localPath, f.Name)
+
+		if f.IsDir {
+			dirCount++
+			if err := downloadRecursive(ctx, remoteFile, localFile); err != nil {
+				warn_("Failed to download %s: %v", remoteFile, err)
+			}
+		} else {
+			fileCount++
+			if err := downloadFileSilent(ctx, remoteFile, localFile); err != nil {
+				warn_("Failed to download %s: %v", remoteFile, err)
+			}
+		}
+	}
+
+	success_("Downloaded %d files, %d directories to %s", fileCount, dirCount, localPath)
+	return nil
+}
+
+// downloadFileSilent downloads a file without verbose output
+func downloadFileSilent(ctx context.Context, remotePath, localPath string) error {
+	file, err := currentTree.OpenFile(ctx, remotePath, types.GenericRead, types.FileOpen)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	localFile, err := os.Create(localPath)
+	if err != nil {
+		return err
+	}
+	defer localFile.Close()
+
+	buf := make([]byte, 65536)
+	for {
+		n, err := file.Read(buf)
+		if n > 0 {
+			localFile.Write(buf[:n])
+		}
+		if err != nil {
+			break
+		}
+	}
+
 	return nil
 }
 
