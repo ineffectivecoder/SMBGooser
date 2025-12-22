@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"os"
@@ -275,6 +276,15 @@ func printBanner() {
 }
 
 func runShell(ctx context.Context) {
+	// Check if we have a terminal
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		runShellWithLiner(ctx)
+	} else {
+		runShellWithBufio(ctx)
+	}
+}
+
+func runShellWithLiner(ctx context.Context) {
 	line := liner.NewLiner()
 	defer line.Close()
 
@@ -304,6 +314,37 @@ func runShell(ctx context.Context) {
 		line.AppendHistory(input)
 
 		args := parseArgs(input)
+		if len(args) == 0 {
+			continue
+		}
+
+		cmd := strings.ToLower(args[0])
+		cmdArgs := args[1:]
+
+		if !executeCommand(ctx, cmd, cmdArgs) {
+			break
+		}
+	}
+}
+
+func runShellWithBufio(ctx context.Context) {
+	reader := bufio.NewReader(os.Stdin)
+
+	for {
+		prompt := buildPrompt()
+		fmt.Print(prompt)
+
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			break
+		}
+
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		args := parseArgs(line)
 		if len(args) == 0 {
 			continue
 		}
