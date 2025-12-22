@@ -13,7 +13,7 @@ func init() {
 		Name:        "secretsdump",
 		Aliases:     []string{"sam", "dump"},
 		Description: "Dump SAM hashes and LSA secrets from remote machine",
-		Usage:       "secretsdump [--lsa] [--all]",
+		Usage:       "secretsdump [--sam-only] [--lsa-only]",
 		Handler:     cmdSecretsDump,
 	})
 }
@@ -24,7 +24,8 @@ func cmdSecretsDump(ctx context.Context, args []string) error {
 		return fmt.Errorf("not connected")
 	}
 
-	dumpLSA := false
+	// Default: dump everything
+	dumpLSA := true
 	dumpSAM := true
 
 	for _, arg := range args {
@@ -32,12 +33,9 @@ func cmdSecretsDump(ctx context.Context, args []string) error {
 		case "help":
 			printSecretsDumpHelp()
 			return nil
-		case "--lsa", "-l":
-			dumpLSA = true
-		case "--all", "-a":
-			dumpLSA = true
-			dumpSAM = true
-		case "--no-sam":
+		case "--sam-only", "-s":
+			dumpLSA = false
+		case "--lsa-only", "-l":
 			dumpSAM = false
 		}
 	}
@@ -59,6 +57,11 @@ func cmdSecretsDump(ctx context.Context, args []string) error {
 			warn_("SAM dump failed: %v", err)
 		} else {
 			fmt.Println()
+			// Display boot key
+			if bootKey := dumper.BootKey(); len(bootKey) > 0 {
+				fmt.Printf("  %sTarget system boot key: 0x%x%s\n", colorGreen, bootKey, colorReset)
+				fmt.Println()
+			}
 			fmt.Printf("  %sSAM Hashes:%s\n", colorBold, colorReset)
 			fmt.Println("  " + strings.Repeat("-", 60))
 			for _, h := range hashes {
@@ -105,15 +108,15 @@ func cmdSecretsDump(ctx context.Context, args []string) error {
 func printSecretsDumpHelp() {
 	fmt.Println("\nUsage: secretsdump [options]")
 	fmt.Println("\nDumps SAM password hashes and LSA secrets from the remote machine.")
+	fmt.Println("By default, dumps everything (SAM + LSA).")
 	fmt.Println("Requires admin privileges on the target.")
 	fmt.Println("\nOptions:")
-	fmt.Println("  --lsa, -l      Also dump LSA secrets (service passwords, DPAPI keys)")
-	fmt.Println("  --all, -a      Dump everything (SAM + LSA)")
-	fmt.Println("  --no-sam       Only dump LSA (skip SAM)")
+	fmt.Println("  --sam-only, -s   Only dump SAM hashes")
+	fmt.Println("  --lsa-only, -l   Only dump LSA secrets")
 	fmt.Println("\nExamples:")
-	fmt.Println("  secretsdump            # Dump SAM only")
-	fmt.Println("  secretsdump --lsa      # Dump SAM + LSA")
-	fmt.Println("  secretsdump --all      # Dump everything")
+	fmt.Println("  secretsdump            # Dump SAM + LSA (default)")
+	fmt.Println("  secretsdump --sam-only # SAM hashes only")
+	fmt.Println("  secretsdump --lsa-only # LSA secrets only")
 	fmt.Println("\nAliases: sam, dump")
 	fmt.Println()
 }

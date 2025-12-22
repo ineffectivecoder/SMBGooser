@@ -1,14 +1,16 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 
 	"github.com/mjwhitta/cli"
+	"github.com/peterh/liner"
 	"golang.org/x/term"
 
 	"github.com/ineffectivecoder/SMBGooser/pkg/auth"
@@ -80,6 +82,7 @@ func main() {
 		pfxPass  string
 		socks5   string
 		shell    bool
+		execCmd  string
 	)
 
 	// Configure CLI
@@ -99,6 +102,7 @@ func main() {
 	cli.Flag(&pfxPath, "c", "cert", "", "PFX/PKCS12 certificate for PKINIT")
 	cli.Flag(&pfxPass, "C", "cert-pass", "", "PFX certificate password")
 	cli.Flag(&socks5, "s", "socks5", "", "SOCKS5 proxy (e.g., 127.0.0.1:1080 or user:pass@host:port)")
+	cli.Flag(&execCmd, "x", "exec", "", "Execute command(s) and exit (semicolon separated)")
 	cli.Flag(&shell, "i", "interactive", true, "Start interactive shell (default)")
 	cli.Flag(&verbose, "v", "verbose", false, "Verbose output")
 
@@ -244,8 +248,25 @@ func main() {
 	currentDomain = domain
 	success_("Authenticated!")
 
-	// Start interactive shell
-	runShell(ctx)
+	// Execute commands or start interactive shell
+	if execCmd != "" {
+		// Non-interactive: execute command(s) and exit
+		for _, cmd := range strings.Split(execCmd, ";") {
+			cmd = strings.TrimSpace(cmd)
+			if cmd == "" {
+				continue
+			}
+			args := parseArgs(cmd)
+			if len(args) > 0 {
+				if !executeCommand(ctx, strings.ToLower(args[0]), args[1:]) {
+					break
+				}
+			}
+		}
+	} else {
+		// Interactive shell
+		runShell(ctx)
+	}
 }
 
 func printBanner() {
@@ -254,26 +275,35 @@ func printBanner() {
 }
 
 func runShell(ctx context.Context) {
-	reader := bufio.NewReader(os.Stdin)
+	line := liner.NewLiner()
+	defer line.Close()
+
+	line.SetCtrlCAborts(true)
+
+	// Set up tab completion
+	line.SetCompleter(func(input string) []string {
+		return completeInput(ctx, input)
+	})
 
 	for {
-		// Build prompt
 		prompt := buildPrompt()
-		fmt.Print(prompt)
-
-		// Read command
-		line, err := reader.ReadString('\n')
+		input, err := line.Prompt(prompt)
 		if err != nil {
-			break
+			if err == liner.ErrPromptAborted {
+				fmt.Println("^C")
+				continue
+			}
+			break // EOF or error
 		}
 
-		line = strings.TrimSpace(line)
-		if line == "" {
+		input = strings.TrimSpace(input)
+		if input == "" {
 			continue
 		}
 
-		// Parse and execute
-		args := parseArgs(line)
+		line.AppendHistory(input)
+
+		args := parseArgs(input)
 		if len(args) == 0 {
 			continue
 		}
@@ -282,9 +312,139 @@ func runShell(ctx context.Context) {
 		cmdArgs := args[1:]
 
 		if !executeCommand(ctx, cmd, cmdArgs) {
-			break // exit command
+			break
 		}
 	}
+}
+
+// completeInput provides tab completion for commands and paths
+func completeInput(ctx context.Context, input string) []string {
+	parts := strings.Fields(input)
+
+	// Complete command names
+	if len(parts) == 0 || (len(parts) == 1 && !strings.HasSuffix(input, " ")) {
+		prefix := ""
+		if len(parts) == 1 {
+			prefix = strings.ToLower(parts[0])
+		}
+		return completeCommands(prefix)
+	}
+
+	// Complete file paths for file commands
+	cmd := strings.ToLower(parts[0])
+	pathCommands := map[string]bool{
+		"ls": true, "dir": true, "cd": true, "cat": true, "type": true,
+		"get": true, "download": true, "put": true, "upload": true,
+		"rm": true, "del": true, "mkdir": true, "md": true, "rmdir": true,
+		"acl": true, "find": true,
+	}
+
+	if pathCommands[cmd] {
+		// Get the path being typed
+		pathArg := ""
+		if len(parts) > 1 {
+			pathArg = parts[len(parts)-1]
+			if strings.HasSuffix(input, " ") {
+				pathArg = ""
+			}
+		}
+		return completePaths(ctx, cmd, pathArg, input)
+	}
+
+	// Complete share names for 'use' command
+	if cmd == "use" {
+		shareArg := ""
+		if len(parts) > 1 {
+			shareArg = parts[1]
+		}
+		return completeShares(shareArg, input)
+	}
+
+	return nil
+}
+
+// completeCommands returns command names matching prefix
+func completeCommands(prefix string) []string {
+	var matches []string
+	seen := make(map[string]bool)
+
+	for _, cmd := range commands.List() {
+		if strings.HasPrefix(strings.ToLower(cmd.Name), prefix) && !seen[cmd.Name] {
+			matches = append(matches, cmd.Name)
+			seen[cmd.Name] = true
+		}
+	}
+
+	sort.Strings(matches)
+	return matches
+}
+
+// completePaths returns path completions from the remote share
+func completePaths(ctx context.Context, cmd, pathArg, fullInput string) []string {
+	if currentTree == nil {
+		return nil
+	}
+
+	// Get directory to list
+	dir := currentPath
+	prefix := ""
+	if pathArg != "" {
+		if strings.Contains(pathArg, "/") || strings.Contains(pathArg, "\\") {
+			// Has path separator - split into dir and prefix
+			pathArg = strings.ReplaceAll(pathArg, "/", "\\")
+			lastSep := strings.LastIndex(pathArg, "\\")
+			dir = filepath.Join(currentPath, pathArg[:lastSep])
+			prefix = strings.ToLower(pathArg[lastSep+1:])
+		} else {
+			prefix = strings.ToLower(pathArg)
+		}
+	}
+
+	// List directory
+	entries, err := currentTree.ListDirectory(ctx, dir)
+	if err != nil {
+		return nil
+	}
+
+	var matches []string
+	baseInput := strings.TrimSuffix(fullInput, pathArg)
+
+	for _, e := range entries {
+		name := e.Name
+		if name == "." || name == ".." {
+			continue
+		}
+		if prefix == "" || strings.HasPrefix(strings.ToLower(name), prefix) {
+			// Build the full completion
+			if e.IsDir {
+				name += "/"
+			}
+			if pathArg != "" && (strings.Contains(pathArg, "/") || strings.Contains(pathArg, "\\")) {
+				lastSep := strings.LastIndex(strings.ReplaceAll(pathArg, "/", "\\"), "\\")
+				matches = append(matches, baseInput+pathArg[:lastSep+1]+name)
+			} else {
+				matches = append(matches, baseInput+name)
+			}
+		}
+	}
+
+	sort.Strings(matches)
+	return matches
+}
+
+// completeShares returns share completions
+func completeShares(prefix, fullInput string) []string {
+	// Common shares
+	shares := []string{"C$", "ADMIN$", "IPC$", "SYSVOL", "NETLOGON"}
+	var matches []string
+	baseInput := strings.TrimSuffix(fullInput, prefix)
+
+	for _, s := range shares {
+		if prefix == "" || strings.HasPrefix(strings.ToLower(s), strings.ToLower(prefix)) {
+			matches = append(matches, baseInput+s)
+		}
+	}
+	return matches
 }
 
 func buildPrompt() string {

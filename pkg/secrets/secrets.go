@@ -18,6 +18,7 @@ type Dumper struct {
 	smbClient  *smb.Client
 	regClient  *rrp.Client
 	tempPrefix string
+	bootKey    []byte // Boot key from SYSTEM hive
 }
 
 // SAMHash represents a dumped SAM hash
@@ -54,6 +55,11 @@ func NewDumper(ctx context.Context, smbClient *smb.Client) (*Dumper, error) {
 		regClient:  regClient,
 		tempPrefix: fmt.Sprintf("smbg%d", time.Now().UnixNano()%100000),
 	}, nil
+}
+
+// BootKey returns the boot key extracted from the SYSTEM hive
+func (d *Dumper) BootKey() []byte {
+	return d.bootKey
 }
 
 // DumpSAM extracts SAM hashes from the remote machine
@@ -259,6 +265,8 @@ func (d *Dumper) parseSAMHashes(systemData, samData []byte) ([]SAMHash, error) {
 		// Fall back to stub if boot key extraction fails
 		return d.parseSAMHashesStub(systemData, samData)
 	}
+	// Save boot key for later access
+	d.bootKey = bootKey
 
 	// Parse SAM hive
 	samHive, err := hive.Parse(samData)

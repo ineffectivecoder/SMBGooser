@@ -5,6 +5,7 @@ package types
 type Dialect uint16
 
 const (
+	DialectSMB1     Dialect = 0x0100 // SMB1 (NT LM 0.12)
 	DialectSMB2_0_2 Dialect = 0x0202 // SMB 2.0.2
 	DialectSMB2_1   Dialect = 0x0210 // SMB 2.1
 	DialectSMB3_0   Dialect = 0x0300 // SMB 3.0

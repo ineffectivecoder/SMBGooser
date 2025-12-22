@@ -132,6 +132,8 @@ func (n *Negotiator) NegotiateWithDialects(ctx context.Context, dialects []types
 // DialectName returns a human-readable dialect name
 func DialectName(d types.Dialect) string {
 	switch d {
+	case types.DialectSMB1:
+		return "NT LM 0.12"
 	case types.DialectSMB2_0_2:
 		return "SMB 2.0.2"
 	case types.DialectSMB2_1:
@@ -145,4 +147,9 @@ func DialectName(d types.Dialect) string {
 	default:
 		return fmt.Sprintf("Unknown (0x%04X)", uint16(d))
 	}
+}
+
+// IsSMB1 returns true if this is an SMB1 dialect
+func IsSMB1(d types.Dialect) bool {
+	return d == types.DialectSMB1
 }
