@@ -117,9 +117,10 @@
 
 - [x] Non-interactive Mode (`-x`) - Execute commands and exit
 - [x] Tab Completion - Commands, file paths, share names (`chzyer/readline`)
-- [ ] Recursive Download (`get -r`) - Download entire directories
-- [ ] File Timestomping - Modify file timestamps
-- [ ] Alternate Data Streams - Hide data in NTFS ADS
+- [x] Recursive Download (`get -r`) - Download entire directories
+- [x] File Timestomping (`touch`) - Modify file timestamps for forensic evasion
+- [ ] Event Log Clearing - Clear Security/System/Application logs
+- [ ] Alternate Data Streams (`ads`) - Hide data in NTFS ADS
 
 ---
 
