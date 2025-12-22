@@ -274,12 +274,8 @@ func printBanner() {
 }
 
 func runShell(ctx context.Context) {
-	// Check if we have a terminal
-	if term.IsTerminal(int(os.Stdin.Fd())) {
-		runShellWithLiner(ctx)
-	} else {
-		runShellWithBufio(ctx)
-	}
+	// Use bufio for now - liner has terminal detection issues
+	runShellWithBufio(ctx)
 }
 
 func runShellWithLiner(ctx context.Context) {
