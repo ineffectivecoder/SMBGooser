@@ -4,14 +4,15 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
 
+	"github.com/chzyer/readline"
 	"github.com/mjwhitta/cli"
-	"github.com/peterh/liner"
 	"golang.org/x/term"
 
 	"github.com/ineffectivecoder/SMBGooser/pkg/auth"
@@ -274,38 +275,53 @@ func printBanner() {
 }
 
 func runShell(ctx context.Context) {
-	// Use bufio for now - liner has terminal detection issues
-	runShellWithBufio(ctx)
+	// Try readline with tab completion, fallback to bufio
+	if err := runShellWithReadline(ctx); err != nil {
+		// Fallback to basic bufio if readline fails
+		runShellWithBufio(ctx)
+	}
 }
 
-func runShellWithLiner(ctx context.Context) {
-	line := liner.NewLiner()
-	defer line.Close()
+func runShellWithReadline(ctx context.Context) error {
+	// Create dynamic completer
+	completer := readline.NewPrefixCompleter(
+		readline.PcItemDynamic(func(line string) []string {
+			return completeInput(ctx, line)
+		}),
+	)
 
-	line.SetCtrlCAborts(true)
-
-	// Set up tab completion
-	line.SetCompleter(func(input string) []string {
-		return completeInput(ctx, input)
+	rl, err := readline.NewEx(&readline.Config{
+		Prompt:          buildPrompt(),
+		HistoryFile:     "",
+		AutoComplete:    completer,
+		InterruptPrompt: "^C",
+		EOFPrompt:       "exit",
+		Stdin:           os.Stdin,
+		Stdout:          os.Stdout,
+		Stderr:          os.Stderr,
 	})
+	if err != nil {
+		return err
+	}
+	defer rl.Close()
 
 	for {
-		prompt := buildPrompt()
-		input, err := line.Prompt(prompt)
+		rl.SetPrompt(buildPrompt())
+		input, err := rl.Readline()
 		if err != nil {
-			if err == liner.ErrPromptAborted {
-				fmt.Println("^C")
+			if err == readline.ErrInterrupt {
 				continue
 			}
-			break // EOF or error
+			if err == io.EOF {
+				break
+			}
+			break
 		}
 
 		input = strings.TrimSpace(input)
 		if input == "" {
 			continue
 		}
-
-		line.AppendHistory(input)
 
 		args := parseArgs(input)
 		if len(args) == 0 {
@@ -319,6 +335,7 @@ func runShellWithLiner(ctx context.Context) {
 			break
 		}
 	}
+	return nil
 }
 
 func runShellWithBufio(ctx context.Context) {
