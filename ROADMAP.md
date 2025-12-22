@@ -107,16 +107,16 @@
 
 ## Future Features
 
-### � Protocol Enhancements
+### 🔧 Protocol Enhancements
 
-- [ ] SMB1 Support - For legacy systems
-- [ ] SMB1 Support - For legacy systems
+- [/] SMB1 Support - Package created (`pkg/smb/smb1/`), integration pending
 - [ ] Multi-channel SMB3 - Faster transfers
 - [ ] Credit Management - Better handling for large transfers
 
 ### 🛠️ Utility Features
 
-- [ ] Tab Completion - Directory/file path completion in shell
+- [x] Non-interactive Mode (`-x`) - Execute commands and exit
+- [/] Tab Completion - Liner library added, needs debugging
 - [ ] Recursive Download (`get -r`) - Download entire directories
 - [ ] File Timestomping - Modify file timestamps
 - [ ] Alternate Data Streams - Hide data in NTFS ADS
@@ -139,6 +139,7 @@
 | Package | Purpose |
 |---------|---------|
 | `pkg/smb` | Core SMB2/3 client |
+| `pkg/smb/smb1` | SMB1 protocol support (WIP) |
 | `pkg/auth` | NTLM authentication |
 | `pkg/pipe` | Named pipe operations |
 | `pkg/dcerpc` | DCE/RPC protocol |

