@@ -116,7 +116,7 @@
 ### 🛠️ Utility Features
 
 - [x] Non-interactive Mode (`-x`) - Execute commands and exit
-- [/] Tab Completion - Liner library added, needs debugging
+- [x] Tab Completion - Commands, file paths, share names (`chzyer/readline`)
 - [ ] Recursive Download (`get -r`) - Download entire directories
 - [ ] File Timestomping - Modify file timestamps
 - [ ] Alternate Data Streams - Hide data in NTFS ADS
