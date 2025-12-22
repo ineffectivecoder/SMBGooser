@@ -82,7 +82,6 @@ func main() {
 		pfxPath  string
 		pfxPass  string
 		socks5   string
-		shell    bool
 		execCmd  string
 	)
 
@@ -104,7 +103,6 @@ func main() {
 	cli.Flag(&pfxPass, "C", "cert-pass", "", "PFX certificate password")
 	cli.Flag(&socks5, "s", "socks5", "", "SOCKS5 proxy (e.g., 127.0.0.1:1080 or user:pass@host:port)")
 	cli.Flag(&execCmd, "x", "exec", "", "Execute command(s) and exit (semicolon separated)")
-	cli.Flag(&shell, "i", "interactive", true, "Start interactive shell (default)")
 	cli.Flag(&verbose, "v", "verbose", false, "Verbose output")
 
 	cli.Parse()
