@@ -27,8 +27,9 @@ type CachedCredential struct {
 
 // LSASecretKey is the decrypted LSA secret encryption key
 type LSASecretKey struct {
-	Key      []byte
-	Revision uint32
+	Key        []byte
+	Revision   uint32
+	VistaStyle bool // True if using AES encryption (Vista+), false for RC4 (XP)
 }
 
 // ExtractLSASecrets extracts LSA secrets from SECURITY hive
@@ -115,16 +116,9 @@ func decryptLSAKeyVista(polEKList, bootKey []byte) (*LSASecretKey, error) {
 	// Derive AES key using SHA256 with 1000 rounds
 	aesKey := deriveAESKeyForLSA(bootKey, salt)
 
-	// Decrypt with AES-CBC, zero IV
-	block, err := aes.NewCipher(aesKey[:16]) // Use first 16 bytes of SHA256 output
-	if err != nil {
-		return nil, err
-	}
-
-	iv := make([]byte, 16)
-	mode := cipher.NewCBCDecrypter(block, iv)
-	decrypted := make([]byte, len(ciphertext))
-	mode.CryptBlocks(decrypted, ciphertext)
+	// Decrypt using Impacket's method: new cipher per block with zero IV
+	// This is NOT standard CBC - it's per-block decryption with IV reset each block
+	decrypted := decryptAESPerBlock(aesKey, ciphertext)
 
 	// Decrypted is LSA_SECRET_BLOB: Length(4) + Unknown(12) + Secret
 	// The LSA key is at offset 52 within Secret for 32 bytes
@@ -134,9 +128,12 @@ func decryptLSAKeyVista(polEKList, bootKey []byte) (*LSASecretKey, error) {
 		return nil, fmt.Errorf("decrypted data too short for key: %d bytes", len(decrypted))
 	}
 
+	lsaKey := decrypted[keyOffset : keyOffset+32]
+
 	return &LSASecretKey{
-		Key:      decrypted[keyOffset : keyOffset+32],
-		Revision: revision,
+		Key:        lsaKey,
+		Revision:   revision,
+		VistaStyle: true, // Using AES encryption (Vista+)
 	}, nil
 }
 
@@ -163,8 +160,9 @@ func decryptLSAKeyXP(polSecretKey, bootKey []byte) (*LSASecretKey, error) {
 	c.XORKeyStream(decrypted, encKey)
 
 	return &LSASecretKey{
-		Key:      decrypted[:16],
-		Revision: 1,
+		Key:        decrypted[:16],
+		Revision:   1,
+		VistaStyle: false, // Using RC4 encryption (XP)
 	}, nil
 }
 
@@ -177,6 +175,38 @@ func deriveAESKeyForLSA(bootKey, salt []byte) []byte {
 		h.Write(salt)
 	}
 	return h.Sum(nil)
+}
+
+// decryptAESPerBlock decrypts using Impacket's method: new cipher per block with zero IV
+// This is NOT standard CBC - each 16-byte block is decrypted with a fresh cipher and zero IV
+func decryptAESPerBlock(key, ciphertext []byte) []byte {
+	result := make([]byte, 0, len(ciphertext))
+	iv := make([]byte, 16)
+
+	for i := 0; i < len(ciphertext); i += 16 {
+		block, err := aes.NewCipher(key)
+		if err != nil {
+			return nil
+		}
+
+		chunk := ciphertext[i:]
+		if len(chunk) > 16 {
+			chunk = chunk[:16]
+		}
+		// Pad if less than 16 bytes
+		if len(chunk) < 16 {
+			padded := make([]byte, 16)
+			copy(padded, chunk)
+			chunk = padded
+		}
+
+		mode := cipher.NewCBCDecrypter(block, iv)
+		decrypted := make([]byte, 16)
+		mode.CryptBlocks(decrypted, chunk)
+		result = append(result, decrypted...)
+	}
+
+	return result
 }
 
 // extractSecret extracts a single LSA secret
@@ -192,8 +222,14 @@ func extractSecret(securityHive *Hive, lsaKey *LSASecretKey, secretName string) 
 		return nil, fmt.Errorf("secret too short")
 	}
 
-	// Decrypt the secret
-	decrypted, err := decryptSecret(currVal, lsaKey)
+	var decrypted []byte
+
+	// NL$KM needs special handling - raw decryption without LSA_SECRET_BLOB parsing
+	if secretName == "NL$KM" && lsaKey.VistaStyle {
+		decrypted, err = decryptSecretRaw(currVal, lsaKey.Key)
+	} else {
+		decrypted, err = decryptSecret(currVal, lsaKey)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -206,6 +242,40 @@ func extractSecret(securityHive *Hive, lsaKey *LSASecretKey, secretName string) 
 		Secret:  decrypted,
 		Decoded: decoded,
 	}, nil
+}
+
+// decryptSecretRaw performs raw AES decryption without LSA_SECRET_BLOB parsing
+// Used for NL$KM which returns data directly
+func decryptSecretRaw(encrypted, lsaKey []byte) ([]byte, error) {
+	headerSize := 28
+	if len(encrypted) < headerSize+32 {
+		return nil, fmt.Errorf("encrypted data too short")
+	}
+
+	encData := encrypted[headerSize:]
+	salt := encData[:32]
+	ciphertext := encData[32:]
+
+	if len(ciphertext) == 0 {
+		return nil, fmt.Errorf("no encrypted data")
+	}
+
+	// Pad to block size
+	if len(ciphertext)%16 != 0 {
+		padLen := 16 - (len(ciphertext) % 16)
+		ciphertext = append(ciphertext, make([]byte, padLen)...)
+	}
+
+	aesKey := deriveSecretAESKey(lsaKey, salt)
+
+	// Use per-block decryption like Impacket
+	decrypted := decryptAESPerBlock(aesKey, ciphertext)
+
+	// Return 80 bytes for NL$KM (16-byte header + 64-byte key)
+	if len(decrypted) > 80 {
+		return decrypted[:80], nil
+	}
+	return decrypted, nil
 }
 
 // decryptSecret decrypts an LSA secret value
@@ -248,16 +318,8 @@ func decryptSecretAES(encrypted, lsaKey []byte) ([]byte, error) {
 	// Derive decryption key using SHA256 with 1000 rounds
 	aesKey := deriveSecretAESKey(lsaKey, salt)
 
-	// Decrypt with AES-CBC, zero IV
-	block, err := aes.NewCipher(aesKey[:16]) // Use first 16 bytes of SHA256 output
-	if err != nil {
-		return nil, err
-	}
-
-	iv := make([]byte, 16)
-	mode := cipher.NewCBCDecrypter(block, iv)
-	decrypted := make([]byte, len(ciphertext))
-	mode.CryptBlocks(decrypted, ciphertext)
+	// Use per-block decryption like Impacket
+	decrypted := decryptAESPerBlock(aesKey, ciphertext)
 
 	// Parse LSA_SECRET_BLOB: Length(4) + Unknown(12) + Secret(Length bytes)
 	if len(decrypted) < 16 {
@@ -329,10 +391,11 @@ func decodeSecret(name string, data []byte) string {
 		}
 
 	case name == "NL$KM":
-		// NL$KM key for cached credentials
-		if len(data) >= 16 {
-			return "NL$KM: " + hex.EncodeToString(data[:16])
+		// NL$KM key for cached credentials - skip 16-byte LSA_SECRET_BLOB header
+		if len(data) > 16 {
+			return "NL$KM: " + hex.EncodeToString(data[16:])
 		}
+		return "NL$KM: " + hex.EncodeToString(data)
 
 	case name == "DefaultPassword":
 		return "AutoLogon: " + decodeUTF16LEPassword(data)
@@ -369,10 +432,8 @@ func extractCachedCredentials(securityHive *Hive, lsaKey *LSASecretKey) ([]Cache
 	// Get NL$KM key for decrypting cached creds
 	nlkmData, err := extractNLKMKey(securityHive, lsaKey)
 	if err != nil {
-		fmt.Printf("[DEBUG Cache] Failed to get NL$KM: %v\n", err)
 		return nil, err
 	}
-	fmt.Printf("[DEBUG Cache] NL$KM key len=%d, hex=%x\n", len(nlkmData), nlkmData)
 
 	// Enumerate Cache entries - these are VALUES under the Cache key, not subkeys
 	// The format is NL$1, NL$2, etc. as value names under SECURITY\Cache
@@ -382,19 +443,16 @@ func extractCachedCredentials(securityHive *Hive, lsaKey *LSASecretKey) ([]Cache
 		if err != nil {
 			continue
 		}
-		fmt.Printf("[DEBUG Cache] Found %s, len=%d\n", valueName, len(cacheEntry))
 		if len(cacheEntry) < 96 {
 			continue
 		}
 
 		cred, err := parseCacheEntry(cacheEntry, nlkmData)
 		if err != nil {
-			fmt.Printf("[DEBUG Cache] Parse error for %s: %v\n", valueName, err)
 			continue
 		}
 
 		if cred.Username != "" {
-			fmt.Printf("[DEBUG Cache] Got cred: %s\\%s\n", cred.Domain, cred.Username)
 			creds = append(creds, *cred)
 		}
 	}
@@ -402,13 +460,52 @@ func extractCachedCredentials(securityHive *Hive, lsaKey *LSASecretKey) ([]Cache
 	return creds, nil
 }
 
-// extractNLKMKey extracts the NL$KM key
+// extractNLKMKey extracts the NL$KM key using Impacket's approach
+// NL$KM is special - we decrypt and return raw data without LSA_SECRET_BLOB parsing
 func extractNLKMKey(securityHive *Hive, lsaKey *LSASecretKey) ([]byte, error) {
-	secret, err := extractSecret(securityHive, lsaKey, "NL$KM")
+
+	// Get the encrypted NL$KM value
+	encrypted, err := securityHive.GetValue("Policy\\Secrets\\NL$KM\\CurrVal", "")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get NL$KM: %w", err)
 	}
-	return secret.Secret, nil
+
+	if len(encrypted) < 60 { // 28 byte header + 32 byte salt minimum
+		return nil, fmt.Errorf("NL$KM data too short: %d bytes", len(encrypted))
+	}
+
+	// LSA_SECRET header is 28 bytes
+	headerSize := 28
+	encData := encrypted[headerSize:]
+
+	// Salt is first 32 bytes
+	salt := encData[:32]
+	// Ciphertext is rest
+	ciphertext := encData[32:]
+
+	if len(ciphertext) == 0 {
+		return nil, fmt.Errorf("no encrypted data in NL$KM")
+	}
+
+	// Pad to AES block size
+	if len(ciphertext)%16 != 0 {
+		padLen := 16 - (len(ciphertext) % 16)
+		ciphertext = append(ciphertext, make([]byte, padLen)...)
+	}
+
+	// Derive AES key: SHA256(lsaKey + salt*1000)
+	aesKey := deriveSecretAESKey(lsaKey.Key, salt)
+
+	// Use per-block decryption like Impacket
+	decrypted := decryptAESPerBlock(aesKey, ciphertext)
+
+	// Return raw decrypted data (should be 64 bytes for NL$KM)
+	// Trim any padding
+	if len(decrypted) > 64 {
+		decrypted = decrypted[:64]
+	}
+
+	return decrypted, nil
 }
 
 // parseCacheEntry parses a cached credential entry
@@ -417,21 +514,32 @@ func parseCacheEntry(entry, nlkmKey []byte) (*CachedCredential, error) {
 		return nil, fmt.Errorf("entry too short")
 	}
 
-	// NL_RECORD structure (from Impacket/mimikatz):
+	// NL_RECORD structure (from Impacket secretsdump.py):
 	// 0-1: UserLength
 	// 2-3: DomainNameLength
 	// 4-5: EffectiveNameLength
 	// 6-7: FullNameLength
-	// ... more fields ...
-	// 40-41: DnsDomainNameLength
-	// 42-43: UPN
+	// 8-15: various lengths
+	// 16-19: UserId
+	// 20-23: PrimaryGroupId
+	// 24-27: GroupCount
+	// 28-29: logonDomainNameLength
+	// 30-31: unk0
+	// 32-39: LastWrite
+	// 40-43: Revision
+	// 44-47: SidCount
+	// 48-51: Flags
+	// 52-55: unk1
+	// 56-59: LogonPackageLength
+	// 60-61: DnsDomainNameLength
+	// 62-63: UPN
 	// 64-79: IV (16 bytes)
 	// 80-95: CH (16 bytes)
 	// 96+: EncryptedData
 
 	userLen := binary.LittleEndian.Uint16(entry[0:2])
 	domainNameLen := binary.LittleEndian.Uint16(entry[2:4])
-	dnsDomainNameLen := binary.LittleEndian.Uint16(entry[40:42])
+	dnsDomainNameLen := binary.LittleEndian.Uint16(entry[60:62]) // Correct offset
 	flags := binary.LittleEndian.Uint32(entry[48:52])
 
 	iv := entry[64:80]
@@ -481,10 +589,6 @@ func parseCacheEntry(entry, nlkmKey []byte) (*CachedCredential, error) {
 	plainText := make([]byte, len(encryptedData))
 	mode.CryptBlocks(plainText, encryptedData)
 
-	fmt.Printf("[DEBUG parseCacheEntry] AES key (NLKM[16:32]): %x\n", aesKey)
-	fmt.Printf("[DEBUG parseCacheEntry] IV: %x\n", iv)
-	fmt.Printf("[DEBUG parseCacheEntry] Decrypted first 128 bytes: %x\n", plainText[:min(128, len(plainText))])
-
 	// Decrypted structure:
 	// 0-15: DCC2 hash
 	// 16-71: padding/metadata
@@ -527,10 +631,10 @@ func parseCacheEntry(entry, nlkmKey []byte) (*CachedCredential, error) {
 	}, nil
 }
 
-// pad4 returns value padded to 4-byte boundary
+// pad4 returns value padded per Impacket's logic: n + (n & 0x3)
 func pad4(n int) int {
-	if n%4 == 0 {
-		return n
+	if n&0x3 > 0 {
+		return n + (n & 0x3)
 	}
-	return n + (4 - n%4)
+	return n
 }

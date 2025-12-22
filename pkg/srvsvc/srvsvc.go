@@ -178,64 +178,83 @@ func encodeNetShareEnum(serverName string, level uint32) []byte {
 }
 
 func parseSessionEnumResponse(resp []byte) ([]SessionInfo, error) {
-	// Response format: Level(4) + InfoStruct ptr(4) + EntriesRead(4) + TotalEntries(4) + ResumeHandle ptr(4) + ErrorCode(4)
-	// Then deferred data with SESSION_INFO_10 array
+	// Response format (from actual protocol trace):
+	// 0-3:   Level (4)
+	// 4-7:   InfoStruct Level (4)
+	// 8-11:  InfoStruct Ptr (4)
+	// 12-15: EntriesRead (4)
+	// 16-19: Array Ptr (4)
+	// 20-23: TotalEntries (4)
+	// 24-27: ResumeHandle Ptr (4)
+	// 28-31: ResumeHandle Referent ID (4)
+	// 32+:   SESSION_INFO_10 entries: time(4) + idle(4) + cname_ref(4) + uname_ref(4) each
+	// Then deferred string data
 
-	if len(resp) < 24 {
+	if len(resp) < 32 {
 		return nil, fmt.Errorf("response too short: %d bytes", len(resp))
 	}
 
+
 	var sessions []SessionInfo
 
-	// Skip Level (4) + InfoStruct ptr (4)
-	offset := 8
-
-	// EntriesRead
-	entriesRead := binary.LittleEndian.Uint32(resp[offset:])
-	offset += 4
-
-	// TotalEntries
-	offset += 4
-
-	// Skip ResumeHandle ptr (4)
-	offset += 4
+	// EntriesRead is at offset 12
+	entriesRead := binary.LittleEndian.Uint32(resp[12:16])
 
 	if entriesRead == 0 || entriesRead > 100 {
 		return sessions, nil
 	}
 
-	// Deferred data: MaxCount(4) + array of SESSION_INFO_10
-	// Each SESSION_INFO_10: cname ptr(4) + username ptr(4) + time(4) + idle_time(4)
-	if offset+4 > len(resp)-4 {
-		return sessions, nil
-	}
-	offset += 4 // MaxCount
+	// SESSION_INFO_10 entries start at offset 32
+	// Each entry: time(4) + idle_time(4) + cname_ref(4) + uname_ref(4) = 16 bytes
+	offset := 32
 
-	// Read pointer entries (each has 4 pointers + 2 uint32s = 16 bytes per entry)
-	// But for level 10, it's: cname_ptr(4) + username_ptr(4) + time(4) + idle_time(4)
 	type sessionEntry struct {
 		time     uint32
 		idleTime uint32
 	}
 	var entries []sessionEntry
 
-	for i := uint32(0); i < entriesRead && offset+16 <= len(resp); i++ {
-		// Skip cname ptr and username ptr
-		offset += 8
-		// Read time and idle_time
+	// Read time/idle for each entry (8 bytes each)
+	// Note: some "entries" may actually be referent IDs - filter by reasonable time values
+	for i := uint32(0); i < entriesRead && offset+8 <= len(resp); i++ {
 		t := binary.LittleEndian.Uint32(resp[offset:])
 		offset += 4
 		it := binary.LittleEndian.Uint32(resp[offset:])
 		offset += 4
+
+		// Skip entries where time looks like a referent ID (> 100000 or is in referent ID range)
+		if t > 100000 || (t >= 0x20000 && t < 0x30000) {
+			continue
+		}
 		entries = append(entries, sessionEntry{time: t, idleTime: it})
 	}
 
-	// Parse deferred string data (cname then username for each entry)
+
+	// Find where string data actually starts by looking for the first valid
+	// conformant varying string header (MaxCount followed by Offset followed by ActualCount)
+	// The MaxCount should match with typical string lengths (< 1000 characters)
+	stringOffset := offset
+	for stringOffset+12 <= len(resp) {
+		maxCount := binary.LittleEndian.Uint32(resp[stringOffset:])
+		nextVal := binary.LittleEndian.Uint32(resp[stringOffset+4:])
+		actualCount := binary.LittleEndian.Uint32(resp[stringOffset+8:])
+		// Valid string header: MaxCount > 0 && MaxCount < 1000, Offset = 0, ActualCount = MaxCount
+		if maxCount > 0 && maxCount < 1000 && nextVal == 0 && actualCount == maxCount {
+			break
+		}
+		stringOffset += 4
+	}
+	offset = stringOffset
+
+	// String data follows immediately after entries
+
+	// String data follows after entries
 	for i := range entries {
 		session := SessionInfo{Time: entries[i].time, IdleTime: entries[i].idleTime}
 
-		// Parse cname (conformant varying string)
-		if offset+12 > len(resp)-4 {
+		// Parse cname (conformant varying string): MaxCount(4) + Offset(4) + ActualCount(4) + Data
+		if offset+12 > len(resp) {
+			sessions = append(sessions, session)
 			break
 		}
 		offset += 8 // Skip MaxCount + Offset
@@ -245,13 +264,14 @@ func parseSessionEnumResponse(resp []byte) ([]SessionInfo, error) {
 		if strBytes > 0 && offset+strBytes <= len(resp) {
 			session.ClientName = decodeUTF16LE(resp[offset : offset+strBytes])
 			offset += strBytes
+			// Align to 4 bytes
 			for offset%4 != 0 && offset < len(resp) {
 				offset++
 			}
 		}
 
 		// Parse username
-		if offset+12 > len(resp)-4 {
+		if offset+12 > len(resp) {
 			sessions = append(sessions, session)
 			break
 		}
@@ -262,6 +282,7 @@ func parseSessionEnumResponse(resp []byte) ([]SessionInfo, error) {
 		if strBytes > 0 && offset+strBytes <= len(resp) {
 			session.UserName = decodeUTF16LE(resp[offset : offset+strBytes])
 			offset += strBytes
+			// Align to 4 bytes
 			for offset%4 != 0 && offset < len(resp) {
 				offset++
 			}

@@ -153,13 +153,14 @@ func encodeNetrWkstaGetInfo(serverName string, level uint32) []byte {
 
 func parseWkstaUserEnumResponse(resp []byte) ([]LoggedOnUser, error) {
 	// Response format (NetrWkstaUserEnum level 1):
-	// - Level (4 bytes) - echoed back
-	// - InfoStruct ptr (4 bytes)
-	// - EntriesRead (4 bytes)
-	// - TotalEntries (4 bytes)
-	// - ResumeHandle ptr (4 bytes)
-	// - ErrorCode (4 bytes)
-	// Then referent data: WKSTA_USER_INFO_1 structures
+	// 0-3:   Level (4)
+	// 4-7:   InfoStruct level (4)
+	// 8-11:  Container Ptr (4)
+	// 12-15: EntriesRead (4)
+	// 16-19: Array Ptr (4)
+	// 20-23: TotalEntries (4)
+	// 24+:   Pointer referent IDs
+	// Then string data
 
 	if len(resp) < 24 {
 		return nil, fmt.Errorf("response too short: %d bytes", len(resp))
@@ -167,69 +168,44 @@ func parseWkstaUserEnumResponse(resp []byte) ([]LoggedOnUser, error) {
 
 	var users []LoggedOnUser
 
-	// Skip Level (4 bytes)
-	offset := 4
-
-	// Skip InfoStruct pointer (4 bytes)
-	offset += 4
-
-	// EntriesRead
-	entriesRead := binary.LittleEndian.Uint32(resp[offset:])
-	offset += 4
-
-	// TotalEntries
-	// totalEntries := binary.LittleEndian.Uint32(resp[offset:])
-	offset += 4
-
-	// Skip ResumeHandle pointer (4 bytes)
-	offset += 4
-
-	// ErrorCode is at end, check it
-	if len(resp) >= 24 {
-		errorCode := binary.LittleEndian.Uint32(resp[len(resp)-4:])
-		if errorCode != 0 && errorCode != 0x105 { // STATUS_MORE_ENTRIES
-			return nil, fmt.Errorf("error code: 0x%08X", errorCode)
-		}
-	}
+	// EntriesRead at offset 12
+	entriesRead := binary.LittleEndian.Uint32(resp[12:16])
 
 	if entriesRead == 0 || entriesRead > 100 {
 		return users, nil
 	}
 
-	// Skip to referent data
-	// Structure: MaxCount(4) + array of entriesRead WKSTA_USER_INFO_1 pointers (4 each)
-	if offset+4 > len(resp) {
-		return users, nil
+	// Find where string data starts by scanning for valid conformant varying string header
+	offset := 24 // Start after fixed header
+	for offset+12 <= len(resp) {
+		maxCount := binary.LittleEndian.Uint32(resp[offset:])
+		nextVal := binary.LittleEndian.Uint32(resp[offset+4:])
+		actualCount := binary.LittleEndian.Uint32(resp[offset+8:])
+		// Valid string header: MaxCount > 0 && MaxCount < 100, Offset = 0, ActualCount = MaxCount
+		if maxCount > 0 && maxCount < 100 && nextVal == 0 && actualCount == maxCount {
+			break
+		}
+		offset += 4
 	}
 
-	// MaxCount for conformant array
-	offset += 4
-
-	// Each WKSTA_USER_INFO_1 has 4 string pointers (username, logon_domain, oth_domains, logon_server)
-	// First read all the pointer entries (4 pointers × 4 bytes = 16 bytes per entry)
-	if offset+int(entriesRead)*16 > len(resp) {
-		return users, nil
-	}
-
-	// Skip pointer array (we know what follows is the string data)
-	offset += int(entriesRead) * 16
-
-	// Now parse the string data for each entry
-	for i := uint32(0); i < entriesRead && offset < len(resp)-4; i++ {
+	// Parse strings - each WKSTA_USER_INFO_1 has 4 strings: username, logon_domain, oth_domains, logon_server
+	for i := uint32(0); i < entriesRead && offset+12 <= len(resp); i++ {
 		user := LoggedOnUser{}
 
-		// Each WKSTA_USER_INFO_1 has 4 strings: username, logon_domain, oth_domains, logon_server
-		for j := 0; j < 4 && offset < len(resp)-4; j++ {
+		for j := 0; j < 4 && offset+12 <= len(resp); j++ {
 			// Conformant varying string: MaxCount(4) + Offset(4) + ActualCount(4) + Data
-			if offset+12 > len(resp) {
-				break
+			maxCount := binary.LittleEndian.Uint32(resp[offset:])
+			stringOffset := binary.LittleEndian.Uint32(resp[offset+4:])
+			actualCount := binary.LittleEndian.Uint32(resp[offset+8:])
+
+			// Validate this looks like a string header
+			if maxCount > 100 || actualCount > 100 || stringOffset != 0 {
+				offset += 4
+				j-- // Retry this slot
+				continue
 			}
 
-			// Skip MaxCount and Offset
-			offset += 8
-
-			actualCount := binary.LittleEndian.Uint32(resp[offset:])
-			offset += 4
+			offset += 12 // Skip header
 
 			strBytes := int(actualCount) * 2
 			if strBytes > 0 && offset+strBytes <= len(resp) {
@@ -243,7 +219,6 @@ func parseWkstaUserEnumResponse(resp []byte) ([]LoggedOnUser, error) {
 					user.LogonServer = str
 				}
 				offset += strBytes
-
 				// Align to 4 bytes
 				for offset%4 != 0 && offset < len(resp) {
 					offset++
@@ -280,14 +255,68 @@ func decodeUTF16LE(data []byte) string {
 }
 
 func parseWkstaGetInfoResponse(resp []byte) (*WorkstationInfo, error) {
-	if len(resp) < 8 {
-		return nil, fmt.Errorf("response too short")
+	// Response format for level 100:
+	// [0-3]   Level (4)
+	// [4-7]   Info ptr (4)
+	// [8-11]  platform_id (4)
+	// [12-15] computername_ptr (4)
+	// [16-19] langroup_ptr (4)
+	// [20-23] ver_major (4)
+	// [24-27] ver_minor (4)
+	// Then deferred string data for computername and langroup
+
+	if len(resp) < 28 {
+		return &WorkstationInfo{ComputerName: "Unknown", Domain: "Unknown"}, nil
 	}
 
-	return &WorkstationInfo{
-		ComputerName: "Unknown",
-		Domain:       "Unknown",
-	}, nil
+	info := &WorkstationInfo{}
+
+	// Find where string data starts by scanning for valid string header
+	offset := 28 // Start after fixed header
+	for offset+12 <= len(resp) {
+		maxCount := binary.LittleEndian.Uint32(resp[offset:])
+		nextVal := binary.LittleEndian.Uint32(resp[offset+4:])
+		actualCount := binary.LittleEndian.Uint32(resp[offset+8:])
+		if maxCount > 0 && maxCount < 100 && nextVal == 0 && actualCount == maxCount {
+			break
+		}
+		offset += 4
+	}
+
+	// Parse computer name
+	if offset+12 <= len(resp) {
+		offset += 8 // Skip MaxCount + Offset
+		actualCount := binary.LittleEndian.Uint32(resp[offset:])
+		offset += 4
+		strBytes := int(actualCount) * 2
+		if strBytes > 0 && offset+strBytes <= len(resp) {
+			info.ComputerName = decodeUTF16LE(resp[offset : offset+strBytes])
+			offset += strBytes
+			for offset%4 != 0 && offset < len(resp) {
+				offset++
+			}
+		}
+	}
+
+	// Parse domain/langroup
+	if offset+12 <= len(resp) {
+		offset += 8 // Skip MaxCount + Offset
+		actualCount := binary.LittleEndian.Uint32(resp[offset:])
+		offset += 4
+		strBytes := int(actualCount) * 2
+		if strBytes > 0 && offset+strBytes <= len(resp) {
+			info.Domain = decodeUTF16LE(resp[offset : offset+strBytes])
+		}
+	}
+
+	if info.ComputerName == "" {
+		info.ComputerName = "Unknown"
+	}
+	if info.Domain == "" {
+		info.Domain = "Unknown"
+	}
+
+	return info, nil
 }
 
 func appendUint32(buf []byte, v uint32) []byte {

