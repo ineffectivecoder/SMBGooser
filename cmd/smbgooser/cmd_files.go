@@ -165,8 +165,8 @@ func registerFileCommands() {
 	commands.Register(&Command{
 		Name:        "get",
 		Aliases:     []string{"download"},
-		Description: "Download a file",
-		Usage:       "get <remote> [local]",
+		Description: "Download a file or directory (-r)",
+		Usage:       "get [-r] <remote> [local]",
 		Handler:     cmdGet,
 	})
 
