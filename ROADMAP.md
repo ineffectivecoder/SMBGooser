@@ -81,7 +81,7 @@
 - [x] Remote Service Execution (`exec`) - via SCMR/svcctl
 - [x] Scheduled Task Execution (`atexec`) - via Task Scheduler/atsvc
 - [x] Remote Registry (`reg`) - query/add/delete via winreg
-- [x] Service Control (`svc`) - list/query/start/stop via svcctl
+- [x] Service Control (`svc`) - query/start/stop/list via svcctl
 - [x] Secrets Dumping (`secretsdump`) - SAM hashes, LSA secrets, cached creds
 - [x] SOCKS5 Proxy Support (`--socks5`) - tunnel through proxy
 
@@ -94,7 +94,7 @@
 - [x] Logged-On Users (`loggedon`) - via WKSSVC
 - [x] Domain Trusts (`trusts`) - via LSARPC
 - [x] Local Admin Members (`localadmins`) - via SAMR
-- [x] Event Log Reading (`eventlog`) - via EVENTLOG RPC
+- [x] Event Log Reading (`eventlog read`) - via EVENTLOG RPC, with full event details
 
 ## Phase 12: Advanced Features ✅
 
@@ -119,7 +119,9 @@
 - [x] Tab Completion - Commands, file paths, share names (`chzyer/readline`)
 - [x] Recursive Download (`get -r`) - Download entire directories
 - [x] File Timestomping (`touch`) - Modify file timestamps for forensic evasion
-- [ ] Event Log Clearing - Clear Security/System/Application logs
+- [/] Event Log Clearing (`eventlog clear`) - Needs debugging (pipe disconnect)
+- [/] Event Log Backup (`eventlog backup`) - Needs path format fix
+- [ ] Event Log Writing (`eventlog write`) - Complex NDR structure needed
 - [ ] Alternate Data Streams (`ads`) - Hide data in NTFS ADS
 
 ---

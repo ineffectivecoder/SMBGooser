@@ -2,6 +2,8 @@
 
 <div align="center">
 
+![SMBGooser](smbgooser.jpg)
+
 ![SMBGooser](https://img.shields.io/badge/SMBGooser-v0.1.0-green)
 ![Go](https://img.shields.io/badge/Go-1.21+-blue)
 ![License](https://img.shields.io/badge/License-MIT-yellow)

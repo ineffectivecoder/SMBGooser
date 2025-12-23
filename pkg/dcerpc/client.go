@@ -102,13 +102,50 @@ func (c *Client) Call(opnum uint16, stubData []byte) ([]byte, error) {
 		return nil, fmt.Errorf("unexpected packet type: %d", header.PacketType)
 	}
 
-	// Parse response
+	// Parse first response
 	var resp Response
 	if err := resp.Unmarshal(response); err != nil {
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 
-	return resp.StubData, nil
+	// Collect all stub data (handle fragmented responses)
+	allStubData := resp.StubData
+
+	// Check if this is a multi-fragment response
+	// If LAST_FRAG is not set, we need to read more fragments
+	for header.PacketFlags&PacketFlagLastFrag == 0 {
+		// Read next fragment
+		fragment := make([]byte, 65536)
+		n, err := c.pipe.Read(fragment)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read response fragment: %w", err)
+		}
+		fragment = fragment[:n]
+
+		// Parse fragment header
+		if err := header.Unmarshal(fragment); err != nil {
+			return nil, fmt.Errorf("failed to parse fragment header: %w", err)
+		}
+
+		if header.PacketType == PacketTypeFault {
+			var fault Fault
+			if err := fault.Unmarshal(fragment); err != nil {
+				return nil, fmt.Errorf("RPC fault in fragment (parse error: %w)", err)
+			}
+			return nil, fmt.Errorf("RPC fault in fragment: status 0x%08X", fault.Status)
+		}
+
+		// Parse fragment response
+		var fragResp Response
+		if err := fragResp.Unmarshal(fragment); err != nil {
+			return nil, fmt.Errorf("failed to parse fragment response: %w", err)
+		}
+
+		// Append stub data from this fragment
+		allStubData = append(allStubData, fragResp.StubData...)
+	}
+
+	return allStubData, nil
 }
 
 // CallRaw makes an RPC call and returns the raw response including header

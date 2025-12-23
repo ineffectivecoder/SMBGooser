@@ -163,7 +163,7 @@ func appendUint32(buf []byte, val uint32) []byte {
 }
 
 // encodeEnumServicesStatus encodes REnumServicesStatusW request
-func encodeEnumServicesStatus(scmHandle Handle, serviceType ServiceType, serviceState uint32) []byte {
+func encodeEnumServicesStatus(scmHandle Handle, serviceType ServiceType, serviceState uint32, bufSize uint32) []byte {
 	stub := make([]byte, 0, 64)
 
 	// hSCManager handle (20 bytes)
@@ -175,10 +175,13 @@ func encodeEnumServicesStatus(scmHandle Handle, serviceType ServiceType, service
 	// dwServiceState (SERVICE_STATE_ALL = 3)
 	stub = appendUint32(stub, serviceState)
 
-	// cbBufSize - buffer size (we'll request a large buffer)
-	stub = appendUint32(stub, 65536)
+	// cbBufSize - buffer size
+	stub = appendUint32(stub, bufSize)
 
-	// lpResumeHandle (null for first call)
+	// lpResumeHandle - unique pointer to DWORD (initial value 0)
+	// Pointer referent ID (non-null)
+	stub = append(stub, 0x00, 0x00, 0x02, 0x00)
+	// The actual value pointed to
 	stub = appendUint32(stub, 0)
 
 	return stub
@@ -198,68 +201,183 @@ func encodeControlService(serviceHandle Handle, control uint32) []byte {
 }
 
 // parseEnumServicesResponse parses REnumServicesStatusW response
-func parseEnumServicesResponse(resp []byte) ([]ServiceInfo, error) {
-	if len(resp) < 16 {
-		return nil, nil
-	}
-
-	// Response format:
-	// lpBuffer (variable) - ENUM_SERVICE_STATUSW array
-	// pcbBytesNeeded (4 bytes)
-	// lpServicesReturned (4 bytes)
-	// lpResumeHandle (4 bytes) - optional
-	// return code (4 bytes)
-
-	// Get count of services (near end of response)
-	// The exact offset depends on the buffer layout
-	// This is a simplified parser that tries to extract service info
-
-	var services []ServiceInfo
-
-	// Try to find service count - it's typically at offset after the buffer
-	// For now, let's parse what we can from the response
-	// The buffer contains ENUM_SERVICE_STATUS_PROCESSW structures
+// bufferSize is the pcbBytesNeeded from the first-phase call
+func parseEnumServicesResponse(resp []byte, bufferSize uint32) ([]ServiceInfo, error) {
+	// Response format for REnumServicesStatusW:
+	// - MaxCount (4 bytes) - NDR conformant array header
+	// - Buffer data (variable, may be truncated due to fragmentation)
+	// - pcbBytesNeeded (4 bytes)
+	// - lpServicesReturned (4 bytes)
+	// - lpResumeIndex pointer (4 bytes) + optional value (4 bytes)
+	// - ErrorCode (4 bytes)
+	//
+	// NOTE: Due to DCE/RPC fragmentation, response may be smaller than expected.
+	// We read trailer from END of response and calculate actual buffer size.
 
 	if len(resp) < 20 {
-		return services, nil
+		return nil, fmt.Errorf("response too short: %d bytes", len(resp))
 	}
 
-	// Check return code at end
-	retCode := binary.LittleEndian.Uint32(resp[len(resp)-4:])
-	if retCode != 0 && retCode != 234 { // 234 = ERROR_MORE_DATA
-		return nil, nil
+	// Read MaxCount from header
+	maxCount := binary.LittleEndian.Uint32(resp[0:4])
+
+	if Debug {
+		fmt.Printf("[DEBUG] parseEnumServicesResponse: resp=%d bytes, maxCount=%d, expected bufferSize=%d\n",
+			len(resp), maxCount, bufferSize)
 	}
 
-	// Try to parse the service entries from the buffer
-	// ENUM_SERVICE_STATUSW is: ServiceName (ptr), DisplayName (ptr), ServiceStatus (28 bytes)
-	// This is complex due to pointer indirection - we'll do a simplified parse
+	// Read trailer from END of response
+	// Try to determine trailer size by checking if resume pointer is null
+	// Trailer options:
+	// - 16 bytes: pcbBytesNeeded(4) + lpServicesReturned(4) + resumePtr(4, null) + retCode(4)
+	// - 20 bytes: pcbBytesNeeded(4) + lpServicesReturned(4) + resumePtr(4) + resumeVal(4) + retCode(4)
 
-	// The response contains offset-based strings
-	// For now, return a placeholder showing we got data
-	if len(resp) > 64 {
-		// We got data, try to extract some service info
-		// This requires proper NDR parsing of the response buffer
-		// For a complete implementation, we'd need to parse the conformant array
+	var retCode, servicesReturned, pcbBytesNeeded uint32
+	var trailerSize int
 
-		// Count is typically at the end before return code
-		if len(resp) >= 16 {
-			countOffset := len(resp) - 12
-			if countOffset > 0 && countOffset < len(resp)-4 {
-				count := binary.LittleEndian.Uint32(resp[countOffset:])
-				if count > 0 && count < 1000 {
-					// We have services but need to parse the buffer properly
-					// For now, indicate success
-					services = append(services, ServiceInfo{
-						ServiceName: "(enumeration returned data - see raw response)",
-						DisplayName: fmt.Sprintf("%d services found (full parsing pending)", count),
-						Status: ServiceStatus{
-							CurrentState: ServiceRunning,
-						},
-					})
-				}
-			}
+	// Try 20-byte trailer first
+	if len(resp) >= 24 {
+		retCode = binary.LittleEndian.Uint32(resp[len(resp)-4:])
+		resumeVal := binary.LittleEndian.Uint32(resp[len(resp)-8:])
+		resumePtr := binary.LittleEndian.Uint32(resp[len(resp)-12:])
+		servicesReturned = binary.LittleEndian.Uint32(resp[len(resp)-16:])
+		pcbBytesNeeded = binary.LittleEndian.Uint32(resp[len(resp)-20:])
+
+		if Debug {
+			fmt.Printf("[DEBUG] Trying 20-byte trailer: pcbNeeded=%d, svcRet=%d, resumePtr=0x%X, resumeVal=%d, retCode=0x%X\n",
+				pcbBytesNeeded, servicesReturned, resumePtr, resumeVal, retCode)
+		}
+
+		// Validate: retCode should be 0 or valid error, servicesReturned should be reasonable
+		if retCode == 0 && servicesReturned > 0 && servicesReturned < 1000 {
+			trailerSize = 20
 		}
 	}
 
+	// Try 16-byte trailer if 20-byte didn't work
+	if trailerSize == 0 && len(resp) >= 20 {
+		retCode = binary.LittleEndian.Uint32(resp[len(resp)-4:])
+		resumePtr := binary.LittleEndian.Uint32(resp[len(resp)-8:])
+		servicesReturned = binary.LittleEndian.Uint32(resp[len(resp)-12:])
+		pcbBytesNeeded = binary.LittleEndian.Uint32(resp[len(resp)-16:])
+
+		if Debug {
+			fmt.Printf("[DEBUG] Trying 16-byte trailer: pcbNeeded=%d, svcRet=%d, resumePtr=0x%X, retCode=0x%X\n",
+				pcbBytesNeeded, servicesReturned, resumePtr, retCode)
+		}
+
+		// Validate
+		if retCode == 0 && servicesReturned > 0 && servicesReturned < 1000 {
+			trailerSize = 16
+		}
+	}
+
+	if trailerSize == 0 {
+		return nil, fmt.Errorf("could not find valid trailer in response")
+	}
+
+	if Debug {
+		fmt.Printf("[DEBUG] Using %d-byte trailer: servicesReturned=%d, retCode=0x%X\n",
+			trailerSize, servicesReturned, retCode)
+	}
+
+	if retCode != 0 {
+		return nil, fmt.Errorf("enumeration failed with error: 0x%08X", retCode)
+	}
+
+	if servicesReturned == 0 {
+		return nil, nil
+	}
+
+	// Calculate actual buffer size from response
+	actualBufferSize := len(resp) - 4 - trailerSize
+	if actualBufferSize <= 0 {
+		return nil, fmt.Errorf("invalid buffer size: %d", actualBufferSize)
+	}
+
+	bufferData := resp[4 : 4+actualBufferSize]
+
+	if Debug {
+		fmt.Printf("[DEBUG] Buffer data: %d bytes (expected %d), parsing %d services\n",
+			actualBufferSize, maxCount, servicesReturned)
+	}
+
+	if servicesReturned > 10000 {
+		return nil, fmt.Errorf("invalid service count: %d", servicesReturned)
+	}
+
+	// The buffer contains ENUM_SERVICE_STATUSW structures:
+	// Each entry is 36 bytes on wire:
+	// - lpServiceName: 4 byte offset from start of buffer
+	// - lpDisplayName: 4 byte offset from start of buffer
+	// - ServiceStatus: 28 bytes (7 DWORDs)
+	//
+	// The offset values point to null-terminated UTF-16LE strings within the same buffer.
+
+	var services []ServiceInfo
+	entrySize := 36 // 4 + 4 + 28
+
+	for i := uint32(0); i < servicesReturned; i++ {
+		entryOffset := int(i) * entrySize
+		if entryOffset+entrySize > len(bufferData) {
+			if Debug {
+				fmt.Printf("[DEBUG] Entry %d at offset %d exceeds buffer size %d\n", i, entryOffset, len(bufferData))
+			}
+			break
+		}
+
+		entry := bufferData[entryOffset:]
+
+		// Read offsets - these are byte offsets from start of buffer
+		serviceNameOffset := binary.LittleEndian.Uint32(entry[0:4])
+		displayNameOffset := binary.LittleEndian.Uint32(entry[4:8])
+
+		// Parse ServiceStatus (28 bytes starting at offset 8)
+		status := ServiceStatus{
+			ServiceType:      ServiceType(binary.LittleEndian.Uint32(entry[8:12])),
+			CurrentState:     ServiceState(binary.LittleEndian.Uint32(entry[12:16])),
+			ControlsAccepted: binary.LittleEndian.Uint32(entry[16:20]),
+			Win32ExitCode:    binary.LittleEndian.Uint32(entry[20:24]),
+			ServiceExitCode:  binary.LittleEndian.Uint32(entry[24:28]),
+			CheckPoint:       binary.LittleEndian.Uint32(entry[28:32]),
+			WaitHint:         binary.LittleEndian.Uint32(entry[32:36]),
+		}
+
+		// Read the string names from the buffer at their offsets
+		serviceName := readUTF16StringFromBuffer(bufferData, serviceNameOffset)
+		displayName := readUTF16StringFromBuffer(bufferData, displayNameOffset)
+
+		if Debug && i < 3 {
+			fmt.Printf("[DEBUG] Service %d: nameOffset=%d, dispOffset=%d, name=%q\n",
+				i, serviceNameOffset, displayNameOffset, serviceName)
+		}
+
+		services = append(services, ServiceInfo{
+			ServiceName: serviceName,
+			DisplayName: displayName,
+			Status:      status,
+		})
+	}
+
 	return services, nil
+}
+
+// readUTF16StringFromBuffer reads a null-terminated UTF-16LE string from buffer at given offset
+func readUTF16StringFromBuffer(buf []byte, offset uint32) string {
+	if int(offset) >= len(buf) {
+		return ""
+	}
+
+	data := buf[offset:]
+	var chars []uint16
+
+	for i := 0; i+1 < len(data); i += 2 {
+		c := binary.LittleEndian.Uint16(data[i:])
+		if c == 0 {
+			break
+		}
+		chars = append(chars, c)
+	}
+
+	return string(utf16.Decode(chars))
 }

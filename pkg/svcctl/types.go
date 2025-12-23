@@ -6,6 +6,9 @@ import (
 	"github.com/ineffectivecoder/SMBGooser/pkg/dcerpc"
 )
 
+// Debug enables verbose output for troubleshooting
+var Debug bool
+
 // SVCCTL interface UUID: 367abb81-9844-35f1-ad32-98f038001003
 var SVCCTL_UUID = dcerpc.MustParseUUID("367abb81-9844-35f1-ad32-98f038001003")
 

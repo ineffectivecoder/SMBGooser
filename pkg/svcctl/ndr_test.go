@@ -109,11 +109,11 @@ func TestAppendUint32(t *testing.T) {
 // TestEncodeEnumServicesStatus tests service enumeration encoding
 func TestEncodeEnumServicesStatus(t *testing.T) {
 	var handle Handle
-	stub := encodeEnumServicesStatus(handle, 0x30, 3)
+	stub := encodeEnumServicesStatus(handle, 0x30, 3, 65536) // Add bufSize parameter
 
-	// Handle (20) + type (4) + state (4) + bufsize (4) + resume (4) = 36
-	if len(stub) != 36 {
-		t.Errorf("encodeEnumServicesStatus returned %d bytes, want 36", len(stub))
+	// Handle (20) + type (4) + state (4) + bufsize (4) + resume pointer (4) + resume value (4) = 40
+	if len(stub) != 40 {
+		t.Errorf("encodeEnumServicesStatus returned %d bytes, want 40", len(stub))
 	}
 }
 

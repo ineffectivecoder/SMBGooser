@@ -219,14 +219,65 @@ func (c *Client) StopService(serviceHandle Handle) (*ServiceStatus, error) {
 
 // EnumServices enumerates all services
 func (c *Client) EnumServices(serviceType ServiceType, serviceState uint32) ([]ServiceInfo, error) {
-	stub := encodeEnumServicesStatus(c.scmHandle, serviceType, serviceState)
+	// Two-phase call like Impacket:
+	// 1. First call with cbBufSize=0 to get pcbBytesNeeded
+	// 2. Second call with the correct buffer size
 
+	// Phase 1: Query needed buffer size
+	stub := encodeEnumServicesStatus(c.scmHandle, serviceType, serviceState, 0)
 	resp, err := c.rpc.Call(OpREnumServicesStatusW, stub)
 	if err != nil {
-		return nil, fmt.Errorf("REnumServicesStatusW failed: %w", err)
+		// We expect this to fail with ERROR_MORE_DATA (234)
+		if resp == nil {
+			return nil, fmt.Errorf("REnumServicesStatusW failed: %w", err)
+		}
 	}
 
-	return parseEnumServicesResponse(resp)
+	// Parse the response to get pcbBytesNeeded
+	// Response format: MaxCount(4) + buffer(0) + pcbBytesNeeded(4) + lpServicesReturned(4) + resumePtr(4) + resumeVal(4) + errcode(4)
+	// With 0-byte buffer, response should be about 24 bytes
+	if len(resp) < 20 {
+		return nil, fmt.Errorf("invalid phase 1 response size: %d", len(resp))
+	}
+
+	if Debug {
+		fmt.Printf("[DEBUG] Phase 1 response: %d bytes, hex: %x\n", len(resp), resp)
+	}
+
+	// Read pcbBytesNeeded from response (after MaxCount and empty buffer)
+	// Structure: MaxCount(4) + pcbBytesNeeded(4) + lpServicesReturned(4) + resumePtr(4) + resumeVal?(4) + retcode(4)
+	pcbBytesNeeded := binary.LittleEndian.Uint32(resp[4:8])
+	retCode := binary.LittleEndian.Uint32(resp[len(resp)-4:])
+
+	if Debug {
+		fmt.Printf("[DEBUG] Phase 1: pcbBytesNeeded=%d, retCode=0x%08X\n", pcbBytesNeeded, retCode)
+	}
+
+	// 234 = ERROR_MORE_DATA, expected when buffer is 0
+	if retCode != 234 && retCode != 0 {
+		return nil, fmt.Errorf("phase 1 enumeration failed with error: 0x%08X", retCode)
+	}
+
+	if pcbBytesNeeded == 0 {
+		return nil, nil // No services
+	}
+
+	// Phase 2: Query with correct buffer size
+	stub = encodeEnumServicesStatus(c.scmHandle, serviceType, serviceState, pcbBytesNeeded)
+	resp, err = c.rpc.Call(OpREnumServicesStatusW, stub)
+	if err != nil {
+		return nil, fmt.Errorf("REnumServicesStatusW phase 2 failed: %w", err)
+	}
+
+	if Debug {
+		fmt.Printf("[DEBUG] Phase 2 response: %d bytes\n", len(resp))
+		if len(resp) >= 32 {
+			fmt.Printf("[DEBUG] First 32 bytes: %x\n", resp[:32])
+			fmt.Printf("[DEBUG] Last 32 bytes: %x\n", resp[len(resp)-32:])
+		}
+	}
+
+	return parseEnumServicesResponse(resp, pcbBytesNeeded)
 }
 
 // QueryServiceStatus queries the status of a service

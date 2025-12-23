@@ -59,6 +59,9 @@ func printSvcHelp() {
 
 // cmdSvcList lists all services
 func cmdSvcList(ctx context.Context, args []string) error {
+	// Enable debug output if verbose mode
+	svcctl.Debug = verbose
+
 	info_("Connecting to Service Control Manager...")
 	svcClient, err := svcctl.NewClient(ctx, client)
 	if err != nil {
