@@ -169,6 +169,34 @@ func cmdHelp(ctx context.Context, args []string) error {
 		return nil
 	}
 
+	// Show registry-specific help when in registry mode
+	if registryMode {
+		fmt.Println()
+		fmt.Printf("%s=== Registry Virtual Filesystem ===%s\n\n", colorBold, colorReset)
+		fmt.Printf("%sNavigation:%s\n", colorCyan, colorReset)
+		fmt.Println("  ls                List subkeys and values")
+		fmt.Println("  cd <key>          Navigate into a registry key")
+		fmt.Println("  cd ..             Go up one level")
+		fmt.Println("  pwd               Show current registry path")
+		fmt.Println()
+		fmt.Printf("%sValues:%s\n", colorCyan, colorReset)
+		fmt.Println("  cat <value>       Display full details of a registry value")
+		fmt.Println()
+		fmt.Printf("%sHives:%s\n", colorCyan, colorReset)
+		fmt.Println("  HKLM              HKEY_LOCAL_MACHINE")
+		fmt.Println("  HKCU              HKEY_CURRENT_USER")
+		fmt.Println("  HKU               HKEY_USERS")
+		fmt.Println("  HKCR              HKEY_CLASSES_ROOT")
+		fmt.Println("  HKCC              HKEY_CURRENT_CONFIG")
+		fmt.Println()
+		fmt.Printf("%sOther:%s\n", colorCyan, colorReset)
+		fmt.Println("  disconnect        Exit registry mode")
+		fmt.Println("  help              Show this help")
+		fmt.Println("  exit              Exit SMBGooser")
+		fmt.Println()
+		return nil
+	}
+
 	// Show all commands grouped by category
 	fmt.Println()
 	fmt.Printf("%s=== SMBGooser Commands ===%s\n\n", colorBold, colorReset)

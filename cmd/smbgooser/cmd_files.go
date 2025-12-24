@@ -21,8 +21,8 @@ func registerShareCommands() {
 	commands.Register(&Command{
 		Name:        "use",
 		Aliases:     []string{"connect"},
-		Description: "Connect to a share",
-		Usage:       "use <sharename>",
+		Description: "Connect to share, registry, or eventlog",
+		Usage:       "use <share|reg|eventlog>",
 		Handler:     cmdUse,
 	})
 
