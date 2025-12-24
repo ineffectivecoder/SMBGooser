@@ -679,6 +679,12 @@ func buildPrompt() string {
 		} else {
 			parts = append(parts, colorBold+"[Registry]"+colorReset)
 		}
+	} else if coerceMode {
+		if currentCoerceIface != nil {
+			parts = append(parts, colorBold+"[Coerce:"+currentCoerceIface.Name+"]"+colorReset)
+		} else {
+			parts = append(parts, colorBold+"[Coerce]"+colorReset)
+		}
 	} else {
 		parts = append(parts, colorBold+"[SMBGooser]"+colorReset)
 	}

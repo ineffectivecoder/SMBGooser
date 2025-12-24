@@ -197,6 +197,32 @@ func cmdHelp(ctx context.Context, args []string) error {
 		return nil
 	}
 
+	// Show coercion-specific help when in coercion mode
+	if coerceMode {
+		fmt.Println()
+		fmt.Printf("%s=== Coercion Radar ===%s\n\n", colorBold, colorReset)
+		fmt.Printf("%sNavigation:%s\n", colorCyan, colorReset)
+		fmt.Println("  ls                List interfaces or methods")
+		fmt.Println("  cd <interface>    Navigate into interface (e.g., cd MS-EFSR)")
+		fmt.Println("  cd ..             Go back to interface list")
+		fmt.Println("  pwd               Show current path")
+		fmt.Println()
+		fmt.Printf("%sExploration:%s\n", colorCyan, colorReset)
+		fmt.Println("  radar             Show summary of confirmed/candidate methods")
+		fmt.Println("  cat <opnum>       Show method details")
+		fmt.Println()
+		fmt.Printf("%sTesting:%s\n", colorCyan, colorReset)
+		fmt.Println("  listener <IP>     Set default listener for callbacks")
+		fmt.Println("  try <opnum>       Test a method for coercion")
+		fmt.Println()
+		fmt.Printf("%sOther:%s\n", colorCyan, colorReset)
+		fmt.Println("  disconnect        Exit coercion mode")
+		fmt.Println("  help              Show this help")
+		fmt.Println("  exit              Exit SMBGooser")
+		fmt.Println()
+		return nil
+	}
+
 	// Show all commands grouped by category
 	fmt.Println()
 	fmt.Printf("%s=== SMBGooser Commands ===%s\n\n", colorBold, colorReset)

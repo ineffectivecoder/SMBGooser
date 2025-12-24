@@ -49,6 +49,9 @@
 - [x] Coercer interface and runner framework
 - [x] Path utilities (UNC, HTTP/WebDAV)
 - [x] Discovery framework for finding new methods (opnum enumeration)
+- [x] HTTP/WebDAV coercion mode for NTLM relay attacks
+- [x] PKT_PRIVACY authenticated RPC for modern Windows targets
+- [x] Correlation tokens for callback tracking (e.g., `spool_abc123`)
 
 ## Phase 7: CLI Client (`cmd/smbgooser`) ✅
 
@@ -211,3 +214,4 @@ go build ./... && go run pkg/minidump/test_parse.go lsass_192.168.90.10_17665286
 | `pkg/srvsvc` | Server Service |
 | `pkg/wkssvc` | Workstation Service |
 | `pkg/lsarpc` | LSA Remote Protocol |
+| `pkg/minidump` | Native LSASS minidump parsing |

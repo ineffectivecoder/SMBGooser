@@ -96,6 +96,8 @@ func cmdUse(ctx context.Context, args []string) error {
 		return cmdUseEventLog(ctx, args)
 	case "registry", "reg":
 		return cmdUseRegistry(ctx, args)
+	case "coerce", "coercion":
+		return enterCoerceMode(ctx)
 	}
 
 	// Exit eventlog mode if active
@@ -150,6 +152,11 @@ func cmdDisconnect(ctx context.Context, args []string) error {
 	// Handle registry mode
 	if registryMode {
 		return cmdRegistryDisconnect(ctx, args)
+	}
+
+	// Handle coercion mode
+	if coerceMode {
+		return cmdCoerceDisconnect(ctx, args)
 	}
 
 	if currentTree == nil {
@@ -248,6 +255,11 @@ func cmdLs(ctx context.Context, args []string) error {
 		return cmdRegistryLs(ctx, args)
 	}
 
+	// Handle coercion mode
+	if coerceMode {
+		return cmdCoerceLs(ctx, args)
+	}
+
 	if currentTree == nil {
 		return fmt.Errorf("not connected to a share (use 'use <share>' first)")
 	}
@@ -302,6 +314,11 @@ func cmdCd(ctx context.Context, args []string) error {
 		return cmdRegistryCd(ctx, args)
 	}
 
+	// Handle coercion mode
+	if coerceMode {
+		return cmdCoerceCd(ctx, args)
+	}
+
 	if currentTree == nil {
 		return fmt.Errorf("not connected to a share")
 	}
@@ -329,6 +346,11 @@ func cmdPwd(ctx context.Context, args []string) error {
 		return cmdRegistryPwd(ctx, args)
 	}
 
+	// Handle coercion mode
+	if coerceMode {
+		return cmdCoercePwd(ctx, args)
+	}
+
 	if currentTree == nil {
 		return fmt.Errorf("not connected to a share")
 	}
@@ -350,6 +372,11 @@ func cmdCat(ctx context.Context, args []string) error {
 	// Handle registry mode
 	if registryMode {
 		return cmdRegistryCat(ctx, args)
+	}
+
+	// Handle coercion mode
+	if coerceMode {
+		return cmdCoerceCat(ctx, args)
 	}
 
 	if currentTree == nil {
