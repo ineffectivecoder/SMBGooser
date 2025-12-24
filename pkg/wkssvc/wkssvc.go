@@ -235,6 +235,7 @@ func parseWkstaUserEnumResponse(resp []byte) ([]LoggedOnUser, error) {
 }
 
 // decodeUTF16LE decodes UTF-16LE bytes to string
+// Stops at first null terminator to avoid garbage data
 func decodeUTF16LE(data []byte) string {
 	if len(data) < 2 {
 		return ""
@@ -243,9 +244,12 @@ func decodeUTF16LE(data []byte) string {
 	for i := 0; i < len(data)/2; i++ {
 		u16[i] = binary.LittleEndian.Uint16(data[i*2:])
 	}
-	// Remove null terminators
-	for len(u16) > 0 && u16[len(u16)-1] == 0 {
-		u16 = u16[:len(u16)-1]
+	// Find first null terminator and stop there
+	for i, v := range u16 {
+		if v == 0 {
+			u16 = u16[:i]
+			break
+		}
 	}
 	runes := make([]rune, len(u16))
 	for i, v := range u16 {

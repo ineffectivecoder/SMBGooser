@@ -20,7 +20,7 @@ func init() {
 
 	commands.Register(&Command{
 		Name:        "loggedon",
-		Aliases:     []string{"logged"},
+		Aliases:     []string{"logged", "users"},
 		Description: "Enumerate logged-on users",
 		Usage:       "loggedon",
 		Handler:     cmdLoggedOn,

@@ -45,7 +45,23 @@ type CachedCred struct {
 
 // NewDumper creates a new secrets dumper
 func NewDumper(ctx context.Context, smbClient *smb.Client) (*Dumper, error) {
-	regClient, err := rrp.NewClient(ctx, smbClient)
+	// Retry connecting to Remote Registry - the service may be starting
+	var regClient *rrp.Client
+	var err error
+
+	maxRetries := 3
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		regClient, err = rrp.NewClient(ctx, smbClient)
+		if err == nil {
+			break
+		}
+
+		if attempt < maxRetries {
+			// Wait and retry - RemoteRegistry service may be starting
+			time.Sleep(2 * time.Second)
+		}
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to remote registry: %w", err)
 	}

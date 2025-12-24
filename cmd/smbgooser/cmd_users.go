@@ -12,9 +12,25 @@ func init() {
 	commands.Register(&Command{
 		Name:        "users",
 		Aliases:     []string{"enum"},
-		Description: "Enumerate users and groups via SAMR",
-		Usage:       "users [options]",
+		Description: "Enumerate domain users via SAMR",
+		Usage:       "users [-d DOMAIN]",
 		Handler:     cmdUsers,
+	})
+
+	commands.Register(&Command{
+		Name:        "groups",
+		Aliases:     []string{},
+		Description: "Enumerate domain groups via SAMR",
+		Usage:       "groups [-d DOMAIN]",
+		Handler:     cmdGroups,
+	})
+
+	commands.Register(&Command{
+		Name:        "computers",
+		Aliases:     []string{"machines"},
+		Description: "Enumerate domain computers via SAMR",
+		Usage:       "computers [-d DOMAIN]",
+		Handler:     cmdComputers,
 	})
 }
 
@@ -136,6 +152,79 @@ func cmdUsers(ctx context.Context, args []string) error {
 
 	fmt.Println()
 	return nil
+}
+
+// cmdGroups enumerates domain groups
+func cmdGroups(ctx context.Context, args []string) error {
+	domainName := currentDomain
+	for i := 0; i < len(args); i++ {
+		if (args[i] == "-d" || args[i] == "--domain") && i+1 < len(args) {
+			domainName = args[i+1]
+			i++
+		}
+	}
+
+	if client == nil || session == nil {
+		return fmt.Errorf("not connected")
+	}
+
+	if domainName == "" {
+		return fmt.Errorf("domain not specified (use -d DOMAIN)")
+	}
+
+	info_("Connecting to SAMR service...")
+	samrClient, err := samr.NewClient(ctx, client)
+	if err != nil {
+		return fmt.Errorf("failed to create SAMR client: %w", err)
+	}
+	defer samrClient.Close()
+
+	if err := samrClient.Connect(); err != nil {
+		return fmt.Errorf("failed to connect: %w", err)
+	}
+
+	info_("Looking up domain: %s", domainName)
+	if err := samrClient.LookupDomain(domainName); err != nil {
+		return fmt.Errorf("failed to lookup domain: %w", err)
+	}
+
+	if err := samrClient.OpenDomain(); err != nil {
+		return fmt.Errorf("failed to open domain: %w", err)
+	}
+
+	info_("Enumerating groups...")
+	groups, err := samrClient.EnumerateGroups()
+	if err != nil {
+		return fmt.Errorf("failed to enumerate groups: %w", err)
+	}
+
+	fmt.Println()
+	fmt.Printf("  %sGroups in %s:%s\n", colorBold, domainName, colorReset)
+	fmt.Println("  " + strings.Repeat("-", 50))
+
+	if len(groups) == 0 {
+		fmt.Println("  No groups found")
+	} else {
+		for _, g := range groups {
+			fmt.Printf("  RID: %-6d  %s\n", g.RID, g.Name)
+		}
+	}
+
+	fmt.Println()
+	success_("Found %d group(s)", len(groups))
+	return nil
+}
+
+// cmdComputers enumerates domain computers
+func cmdComputers(ctx context.Context, args []string) error {
+	domainName := currentDomain
+	for i := 0; i < len(args); i++ {
+		if (args[i] == "-d" || args[i] == "--domain") && i+1 < len(args) {
+			domainName = args[i+1]
+			i++
+		}
+	}
+	return cmdEnumComputers(ctx, domainName)
 }
 
 // cmdPasswordPolicy queries domain password policy

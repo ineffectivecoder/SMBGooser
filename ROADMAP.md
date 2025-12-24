@@ -119,10 +119,64 @@
 - [x] Tab Completion - Commands, file paths, share names (`chzyer/readline`)
 - [x] Recursive Download (`get -r`) - Download entire directories
 - [x] File Timestomping (`touch`) - Modify file timestamps for forensic evasion
-- [/] Event Log Clearing (`eventlog clear`) - Needs debugging (pipe disconnect)
-- [/] Event Log Backup (`eventlog backup`) - Needs path format fix
-- [ ] Event Log Writing (`eventlog write`) - Complex NDR structure needed
+- [x] Event Log Clearing (`eventlog clear`) - Fixed! Works with device path format
+- [x] Event Log Backup (`eventlog backup`) - Fixed! Uses toDevicePath helper
+- [x] Event Log Writing (`eventlog write`) - Fixed! RPC method works, -schtask fallback
+- [ ] Enhanced Event Log Viewer - Directory-style navigation, rendered details view
 - [ ] Alternate Data Streams (`ads`) - Hide data in NTFS ADS
+
+---
+
+## 🟢 COMPLETED: Native LSASS Credential Extraction
+
+**Goal:** Extract NT hashes from LSASS minidumps without external dependencies (pypykatz).
+
+### Completed ✅
+
+- `lsadump` command with svcctl/tsch execution for remote LSASS dumping
+- `-a` flag for ADS-based stealth dumping  
+- Minidump parsing (`pkg/minidump`)
+- Module enumeration and lsasrv.dll/msv1_0.dll finding
+- **VA-to-offset translation** - `MemoryRanges`, `VAToOffset()`, `ReadVA()`
+- **LSA key extraction** - IV, AES key, DES key all extracted correctly (validated against pypykatz)
+- MSV signature finding at correct offset
+- LogonSessionList pointer resolution
+- **Multiple logon session list support** - Windows 8+ stores sessions in multiple linked lists
+- **Credential list walking** - extracting credentials with correct Username/Domain
+- KIWI_MSV1_0_PRIMARY_CREDENTIAL_ENC structure parsing
+- **NT hash decryption** - AES-CFB and 3DES-CBC modes working correctly ✅
+- **SHA1 hash extraction** - from MSV1_0_PRIMARY_CREDENTIAL_10_1607_DEC structure ✅
+- **Credential deduplication** - removes duplicate entries from multiple list traversals
+
+### Verified Output
+
+```
+Domain: IIS APPPOOL | User: DefaultAppPool | NT: dca73295c4666c7ccf20acbe9811c135 | SHA1: df4f1565fc4e1a11bf4f075594bb14bb19f7c6b9
+Domain: ROOTSHELL | User: SENSEI$ | NT: dca73295c4666c7ccf20acbe9811c135 | SHA1: df4f1565fc4e1a11bf4f075594bb14bb19f7c6b9
+Domain: Font Driver Host | User: UMFD-0 | NT: dca73295c4666c7ccf20acbe9811c135 | SHA1: df4f1565fc4e1a11bf4f075594bb14bb19f7c6b9
+Domain: Font Driver Host | User: UMFD-1 | NT: dca73295c4666c7ccf20acbe9811c135 | SHA1: df4f1565fc4e1a11bf4f075594bb14bb19f7c6b9
+```
+
+All NT and SHA1 hashes match pypykatz output.
+
+### Test Command
+
+```bash
+go build ./... && go run pkg/minidump/test_parse.go lsass_192.168.90.10_1766528649.dmp
+```
+
+---
+
+### Task Scheduler Fix (Resolved ✅)
+
+**Problem:** `atexec` failed with `rpc_s_access_denied` / RPC fault 0x05
+
+**Root Cause:** Using `TASK_LOGON_S4U` (2) instead of `TASK_LOGON_NONE` (0)
+
+**Fix Applied:**
+
+- Changed `logonType` from `TASK_LOGON_S4U` to `TASK_LOGON_NONE` in `pkg/tsch/ndr.go`
+- Updated XML format in `pkg/tsch/tsch.go` to match Impacket's `atexec.py`
 
 ---
 

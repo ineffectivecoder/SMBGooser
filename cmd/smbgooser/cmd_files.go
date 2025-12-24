@@ -81,7 +81,7 @@ func cmdShares(ctx context.Context, args []string) error {
 
 func cmdUse(ctx context.Context, args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: use <sharename>")
+		return fmt.Errorf("usage: use <sharename|eventlog>")
 	}
 
 	if session == nil {
@@ -89,6 +89,18 @@ func cmdUse(ctx context.Context, args []string) error {
 	}
 
 	shareName := args[0]
+
+	// Check for eventlog virtual filesystem
+	switch strings.ToLower(shareName) {
+	case "eventlog", "events", "evt", "logs":
+		return cmdUseEventLog(ctx, args)
+	}
+
+	// Exit eventlog mode if active
+	if eventlogMode {
+		eventlogMode = false
+		eventlogPath = ""
+	}
 
 	// Disconnect from current share if any
 	if currentTree != nil {
@@ -118,6 +130,11 @@ func cmdUse(ctx context.Context, args []string) error {
 }
 
 func cmdDisconnect(ctx context.Context, args []string) error {
+	// Handle eventlog mode
+	if eventlogMode {
+		return cmdEventLogDisconnect(ctx, args)
+	}
+
 	if currentTree == nil {
 		return fmt.Errorf("not connected to any share")
 	}
@@ -204,6 +221,11 @@ func registerFileCommands() {
 }
 
 func cmdLs(ctx context.Context, args []string) error {
+	// Handle eventlog mode
+	if eventlogMode {
+		return cmdEventLogLs(ctx, args)
+	}
+
 	if currentTree == nil {
 		return fmt.Errorf("not connected to a share (use 'use <share>' first)")
 	}
@@ -248,6 +270,11 @@ func cmdLs(ctx context.Context, args []string) error {
 }
 
 func cmdCd(ctx context.Context, args []string) error {
+	// Handle eventlog mode
+	if eventlogMode {
+		return cmdEventLogCd(ctx, args)
+	}
+
 	if currentTree == nil {
 		return fmt.Errorf("not connected to a share")
 	}
@@ -283,6 +310,11 @@ func cmdPwd(ctx context.Context, args []string) error {
 }
 
 func cmdCat(ctx context.Context, args []string) error {
+	// Handle eventlog mode
+	if eventlogMode {
+		return cmdEventLogCat(ctx, args)
+	}
+
 	if currentTree == nil {
 		return fmt.Errorf("not connected to a share")
 	}

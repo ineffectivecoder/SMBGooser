@@ -22,6 +22,7 @@ func ToUTF16LE(s string) []byte {
 }
 
 // FromUTF16LE converts UTF-16LE encoded bytes to a Go string.
+// Handles Windows garbage in FileNameLength by detecting invalid UTF-16 pairs.
 func FromUTF16LE(b []byte) string {
 	if len(b) == 0 {
 		return ""
@@ -30,6 +31,40 @@ func FromUTF16LE(b []byte) string {
 	// Ensure even number of bytes
 	if len(b)%2 != 0 {
 		b = b[:len(b)-1]
+	}
+
+	// Find where valid UTF-16LE ends
+	// For ASCII filenames, valid UTF-16LE has pattern: [ASCII byte][0x00]
+	// Windows may include garbage like pool tags (LMEMP) where high byte != 0
+	validEnd := len(b)
+	for i := 0; i < len(b)-1; i += 2 {
+		low := b[i]
+		high := b[i+1]
+
+		// Null terminator
+		if low == 0 && high == 0 {
+			validEnd = i
+			break
+		}
+
+		// For printable ASCII range (0x20-0x7E), high byte should be 0
+		// If we see high byte != 0 for what should be ASCII, it's garbage
+		if low >= 0x20 && low <= 0x7E && high != 0 {
+			validEnd = i
+			break
+		}
+
+		// Also check for Windows pool tag pattern: two consecutive ASCII bytes
+		// like "LM" (0x4C 0x4D) which is invalid UTF-16LE for a filename
+		if high >= 0x41 && high <= 0x5A { // high byte is uppercase letter = garbage
+			validEnd = i
+			break
+		}
+	}
+
+	b = b[:validEnd]
+	if len(b) == 0 {
+		return ""
 	}
 
 	// Convert bytes to UTF-16 code points

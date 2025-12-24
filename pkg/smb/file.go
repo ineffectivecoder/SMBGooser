@@ -27,6 +27,53 @@ func (t *Tree) OpenFile(ctx context.Context, path string, access types.AccessMas
 	return t.open(ctx, path, access, disposition, types.FileNonDirectoryFile)
 }
 
+// OpenFileImpacket opens a file with Impacket's exact openFile() parameters
+// Critical difference: ShareAccess=FileShareRead only (not FileShareRead|FileShareWrite|FileShareDelete)
+func (t *Tree) OpenFileImpacket(ctx context.Context, path string, access types.AccessMask, disposition types.CreateDisposition) (*File, error) {
+	// Convert path to UTF-16LE
+	pathBytes := encoding.ToUTF16LE(path)
+
+	// Build CREATE request with Impacket's exact parameters
+	req := types.NewCreateRequestImpacket(pathBytes, access, disposition)
+
+	// Build header
+	header := types.NewHeader(types.CommandCreate, t.session.nextMessageID())
+	header.SessionID = t.session.sessionID
+	header.TreeID = t.treeID
+
+	// Send request
+	resp, err := t.session.sendRecv(header, req.Marshal())
+	if err != nil {
+		return nil, fmt.Errorf("create failed: %w", err)
+	}
+
+	// Parse response header
+	var respHeader types.Header
+	if err := respHeader.Unmarshal(resp[:types.SMB2HeaderSize]); err != nil {
+		return nil, fmt.Errorf("failed to parse response header: %w", err)
+	}
+
+	// Check status
+	if !respHeader.Status.IsSuccess() {
+		return nil, StatusToError(respHeader.Status)
+	}
+
+	// Parse CREATE response
+	var createResp types.CreateResponse
+	if err := createResp.Unmarshal(resp[types.SMB2HeaderSize:]); err != nil {
+		return nil, fmt.Errorf("failed to parse create response: %w", err)
+	}
+
+	return &File{
+		tree:       t,
+		fileID:     createResp.FileID,
+		name:       path,
+		size:       createResp.EndOfFile,
+		attributes: createResp.FileAttributes,
+		isDir:      false,
+	}, nil
+}
+
 // OpenPipe opens a named pipe on the IPC$ share
 // Named pipes need different options than regular files
 func (t *Tree) OpenPipe(ctx context.Context, pipeName string, access types.AccessMask) (*File, error) {

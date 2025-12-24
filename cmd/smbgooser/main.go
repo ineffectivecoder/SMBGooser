@@ -16,6 +16,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/ineffectivecoder/SMBGooser/pkg/auth"
+	"github.com/ineffectivecoder/SMBGooser/pkg/debug"
 	"github.com/ineffectivecoder/SMBGooser/pkg/smb"
 )
 
@@ -61,14 +62,20 @@ const (
 
 // Global state
 var (
-	verbose       bool
-	client        *smb.Client
-	session       *smb.Session
-	currentTree   *smb.Tree
-	currentPath   string
-	targetHost    string
-	currentUser   string
-	currentDomain string
+	verbose         bool
+	client          *smb.Client
+	session         *smb.Session
+	currentTree     *smb.Tree
+	currentPath     string
+	targetHost      string
+	currentUser     string
+	currentDomain   string
+	currentPassword string // For DCERPC PKT_PRIVACY auth
+	currentHash     []byte // NT hash for pass-the-hash
+
+	// Event log virtual filesystem mode
+	eventlogMode bool   // true when "use eventlog" is active
+	eventlogPath string // "" = root, "Security"/"System"/"Application" = in log
 )
 
 func main() {
@@ -88,7 +95,7 @@ func main() {
 
 	// Configure CLI
 	cli.Align = true
-	cli.Banner = fmt.Sprintf("smbgooser [OPTIONS]")
+	cli.Banner = "smbgooser [OPTIONS]"
 	cli.Info("Red Team SMB Client - Directory ops, pipes, coercion, and more")
 	cli.Authors = []string{"SMBGooser Team"}
 
@@ -107,6 +114,9 @@ func main() {
 	cli.Flag(&verbose, "v", "verbose", false, "Verbose output")
 
 	cli.Parse()
+
+	// Set global debug flag
+	debug.Verbose = verbose
 
 	// Print banner
 	printBanner()
@@ -246,6 +256,10 @@ func main() {
 	session = client.Session()
 	currentUser = username
 	currentDomain = domain
+	currentPassword = password
+	if hash != "" {
+		currentHash = parseHash(hash)
+	}
 	success_("Authenticated!")
 
 	// Execute commands or start interactive shell
@@ -382,8 +396,69 @@ func completeInput(ctx context.Context, input string) []string {
 		return completeCommands(prefix)
 	}
 
-	// Complete file paths for file commands
 	cmd := strings.ToLower(parts[0])
+
+	// Subcommand completions
+	subcommands := map[string][]string{
+		"eventlog": {"backup", "clear", "info", "list", "read", "write"},
+		"svc":      {"list", "query", "start", "stop", "create", "delete"},
+		"reg":      {"query", "add", "delete", "save", "enum"},
+		"rpc":      {"bind", "call", "scan", "status", "close"},
+		"pipe":     {"open", "read", "write", "transact", "close", "status"},
+		"users":    {"-c", "-p"},
+		"exec":     {"-method", "-cmd"},
+		"atexec":   {"-cmd"},
+		"use":      {"eventlog", "C$", "ADMIN$", "IPC$", "SYSVOL", "NETLOGON"},
+	}
+
+	// Argument completions (for specific subcommands)
+	argCompletions := map[string][]string{
+		"eventlog read":   {"Security", "System", "Application", "Setup", "ForwardedEvents"},
+		"eventlog clear":  {"Security", "System", "Application"},
+		"eventlog info":   {"Security", "System", "Application"},
+		"eventlog backup": {"Security", "System", "Application"},
+	}
+
+	// Check if completing subcommand
+	if subs, ok := subcommands[cmd]; ok {
+		// If only command typed + space, show subcommands
+		if len(parts) == 1 && strings.HasSuffix(input, " ") {
+			return formatCompletions(cmd, subs, "")
+		}
+		// If typing subcommand, filter matches
+		if len(parts) == 2 && !strings.HasSuffix(input, " ") {
+			prefix := strings.ToLower(parts[1])
+			return filterCompletions(cmd, subs, prefix)
+		}
+		// Check for argument completions
+		if len(parts) >= 2 {
+			key := cmd + " " + strings.ToLower(parts[1])
+			if args, ok := argCompletions[key]; ok {
+				if len(parts) == 2 && strings.HasSuffix(input, " ") {
+					return formatCompletions(cmd+" "+parts[1], args, "")
+				}
+				if len(parts) == 3 && !strings.HasSuffix(input, " ") {
+					prefix := strings.ToLower(parts[2])
+					return filterCompletions(cmd+" "+parts[1], args, prefix)
+				}
+			}
+		}
+	}
+
+	// Special handling for cd in eventlog mode
+	if cmd == "cd" && eventlogMode {
+		logs := []string{"Security", "System", "Application", ".."}
+		if len(parts) == 1 && strings.HasSuffix(input, " ") {
+			return formatCompletions("cd", logs, "")
+		}
+		if len(parts) == 2 && !strings.HasSuffix(input, " ") {
+			prefix := strings.ToLower(parts[1])
+			return filterCompletions("cd", logs, prefix)
+		}
+		return nil
+	}
+
+	// Complete file paths for file commands
 	pathCommands := map[string]bool{
 		"ls": true, "dir": true, "cd": true, "cat": true, "type": true,
 		"get": true, "download": true, "put": true, "upload": true,
@@ -413,6 +488,28 @@ func completeInput(ctx context.Context, input string) []string {
 	}
 
 	return nil
+}
+
+// formatCompletions formats completion results with the command prefix
+func formatCompletions(cmdPrefix string, items []string, prefix string) []string {
+	var results []string
+	for _, item := range items {
+		if prefix == "" || strings.HasPrefix(strings.ToLower(item), prefix) {
+			results = append(results, cmdPrefix+" "+item)
+		}
+	}
+	return results
+}
+
+// filterCompletions filters items by prefix
+func filterCompletions(cmdPrefix string, items []string, prefix string) []string {
+	var results []string
+	for _, item := range items {
+		if strings.HasPrefix(strings.ToLower(item), prefix) {
+			results = append(results, cmdPrefix+" "+item)
+		}
+	}
+	return results
 }
 
 // completeCommands returns command names matching prefix
@@ -501,11 +598,21 @@ func completeShares(prefix, fullInput string) []string {
 
 func buildPrompt() string {
 	var parts []string
-	parts = append(parts, colorBold+"[SMBGooser]"+colorReset)
+
+	// Show EventLog mode or normal mode
+	if eventlogMode {
+		if eventlogPath != "" {
+			parts = append(parts, colorBold+"[EventLog:"+eventlogPath+"]"+colorReset)
+		} else {
+			parts = append(parts, colorBold+"[EventLog]"+colorReset)
+		}
+	} else {
+		parts = append(parts, colorBold+"[SMBGooser]"+colorReset)
+	}
 
 	if targetHost != "" {
 		hostPart := colorCyan + targetHost + colorReset
-		if currentTree != nil {
+		if !eventlogMode && currentTree != nil {
 			hostPart += "/" + currentTree.ShareName()
 			if currentPath != "" {
 				hostPart += "/" + currentPath

@@ -226,24 +226,20 @@ func parseEnumerateUsersResponse(resp []byte) ([]UserInfo, error) {
 		return users, nil
 	}
 
-	// Response format:
-	// DWORD EnumerationContext
-	// PSAMPR_ENUMERATION_BUFFER Buffer (pointer)
-	// DWORD CountReturned
-	// NTSTATUS Return
+	// Response format (with NDR deferred pointers):
+	// Offset 0:  DWORD EnumerationContext
+	// Offset 4:  Referent ID for Buffer pointer
+	// Offset 8:  DWORD CountReturned
+	// Offset 12: Referent ID for Buffer->Array pointer (deferred)
+	// Offset 16: DWORD EntriesRead
+	// Offset 20: Entry data...
 
 	offset := 0
 
 	// EnumerationContext
-	if offset+4 > len(resp) {
-		return users, nil
-	}
 	offset += 4
 
-	// Buffer pointer
-	if offset+4 > len(resp) {
-		return users, nil
-	}
+	// Buffer pointer referent
 	bufferPtr := binary.LittleEndian.Uint32(resp[offset:])
 	offset += 4
 
@@ -252,9 +248,6 @@ func parseEnumerateUsersResponse(resp []byte) ([]UserInfo, error) {
 	}
 
 	// CountReturned
-	if offset+4 > len(resp) {
-		return users, nil
-	}
 	countReturned := binary.LittleEndian.Uint32(resp[offset:])
 	offset += 4
 
@@ -262,14 +255,10 @@ func parseEnumerateUsersResponse(resp []byte) ([]UserInfo, error) {
 		return users, nil
 	}
 
-	// SAMPR_ENUMERATION_BUFFER:
-	//   DWORD EntriesRead
-	//   [size_is(EntriesRead)] PSAMPR_RID_ENUMERATION Buffer
+	// Array pointer referent (deferred pointer for Buffer in SAMPR_ENUMERATION_BUFFER)
+	offset += 4
 
-	// EntriesRead (in referred data)
-	if offset+4 > len(resp) {
-		return users, nil
-	}
+	// EntriesRead (the actual count in the buffer)
 	entriesRead := binary.LittleEndian.Uint32(resp[offset:])
 	offset += 4
 
@@ -277,17 +266,7 @@ func parseEnumerateUsersResponse(resp []byte) ([]UserInfo, error) {
 		return users, nil
 	}
 
-	// Buffer array pointer
-	if offset+4 > len(resp) {
-		return users, nil
-	}
-	offset += 4
-
-	// MaxCount of array
-	if offset+4 > len(resp) {
-		return users, nil
-	}
-	offset += 4
+	// Entry data starts immediately (no MaxCount - it's implicit from EntriesRead)
 
 	// === FIRST PASS: Read RIDs and string headers ===
 	type entryHeader struct {
@@ -456,24 +435,26 @@ func parseEnumerateGroupsResponse(resp []byte) ([]GroupInfo, error) {
 		return groups, nil
 	}
 
-	// Similar structure to users, but returns GroupInfo
+	// Check return code at end
 	retCode := binary.LittleEndian.Uint32(resp[len(resp)-4:])
 	if retCode != 0 && retCode != 0x105 {
 		return groups, nil
 	}
 
+	// Same response format as users (with NDR deferred pointers):
+	// Offset 0:  DWORD EnumerationContext
+	// Offset 4:  Referent ID for Buffer pointer
+	// Offset 8:  DWORD CountReturned
+	// Offset 12: Referent ID for Buffer->Array pointer (deferred)
+	// Offset 16: DWORD EntriesRead
+	// Offset 20: Entry data...
+
 	offset := 0
 
 	// EnumerationContext
-	if offset+4 > len(resp) {
-		return groups, nil
-	}
 	offset += 4
 
-	// Buffer pointer
-	if offset+4 > len(resp) {
-		return groups, nil
-	}
+	// Buffer pointer referent
 	bufferPtr := binary.LittleEndian.Uint32(resp[offset:])
 	offset += 4
 
@@ -482,9 +463,6 @@ func parseEnumerateGroupsResponse(resp []byte) ([]GroupInfo, error) {
 	}
 
 	// CountReturned
-	if offset+4 > len(resp) {
-		return groups, nil
-	}
 	countReturned := binary.LittleEndian.Uint32(resp[offset:])
 	offset += 4
 
@@ -492,10 +470,10 @@ func parseEnumerateGroupsResponse(resp []byte) ([]GroupInfo, error) {
 		return groups, nil
 	}
 
+	// Array pointer referent
+	offset += 4
+
 	// EntriesRead
-	if offset+4 > len(resp) {
-		return groups, nil
-	}
 	entriesRead := binary.LittleEndian.Uint32(resp[offset:])
 	offset += 4
 
@@ -503,21 +481,79 @@ func parseEnumerateGroupsResponse(resp []byte) ([]GroupInfo, error) {
 		return groups, nil
 	}
 
-	// Skip array pointer and maxcount
-	offset += 8
+	// === FIRST PASS: Read RIDs and string headers ===
+	type entryHeader struct {
+		RID       uint32
+		Length    uint16
+		MaxLength uint16
+		StrPtr    uint32
+	}
 
-	// Parse entries
+	headers := make([]entryHeader, 0, entriesRead)
 	for i := uint32(0); i < entriesRead && offset+12 <= len(resp)-4; i++ {
 		rid := binary.LittleEndian.Uint32(resp[offset:])
 		offset += 4
 
-		// Skip RPC_UNICODE_STRING header (8 bytes)
-		offset += 8
+		length := binary.LittleEndian.Uint16(resp[offset:])
+		offset += 2
 
-		groups = append(groups, GroupInfo{
-			RID:  rid,
-			Name: "",
+		maxLen := binary.LittleEndian.Uint16(resp[offset:])
+		offset += 2
+
+		strPtr := binary.LittleEndian.Uint32(resp[offset:])
+		offset += 4
+
+		headers = append(headers, entryHeader{
+			RID:       rid,
+			Length:    length,
+			MaxLength: maxLen,
+			StrPtr:    strPtr,
 		})
+	}
+
+	// === SECOND PASS: Read string data ===
+	for _, h := range headers {
+		group := GroupInfo{RID: h.RID}
+
+		if h.StrPtr != 0 && h.Length > 0 {
+			// MaxCount
+			if offset+4 > len(resp)-4 {
+				break
+			}
+			offset += 4
+
+			// Offset
+			if offset+4 > len(resp)-4 {
+				break
+			}
+			offset += 4
+
+			// ActualCount
+			if offset+4 > len(resp)-4 {
+				break
+			}
+			actualCount := binary.LittleEndian.Uint32(resp[offset:])
+			offset += 4
+
+			// Read string bytes
+			strBytes := int(actualCount) * 2
+			if offset+strBytes > len(resp)-4 {
+				strBytes = len(resp) - 4 - offset
+			}
+
+			if strBytes > 0 && offset+strBytes <= len(resp) {
+				name := decodeUTF16LE(resp[offset : offset+strBytes])
+				group.Name = name
+				offset += strBytes
+
+				// Align to 4 bytes
+				for offset%4 != 0 && offset < len(resp) {
+					offset++
+				}
+			}
+		}
+
+		groups = append(groups, group)
 	}
 
 	return groups, nil

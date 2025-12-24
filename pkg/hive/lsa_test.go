@@ -93,8 +93,8 @@ func TestDeriveAESKeyForLSA(t *testing.T) {
 	salt := make([]byte, 16)
 
 	key := deriveAESKeyForLSA(bootKey, salt)
-	if len(key) != 16 {
-		t.Errorf("deriveAESKeyForLSA returned %d bytes, want 16", len(key))
+	if len(key) != 32 {
+		t.Errorf("deriveAESKeyForLSA returned %d bytes, want 32", len(key))
 	}
 }
 
@@ -104,8 +104,8 @@ func TestDeriveSecretAESKey(t *testing.T) {
 	salt := make([]byte, 16)
 
 	key := deriveSecretAESKey(lsaKey, salt)
-	if len(key) != 16 {
-		t.Errorf("deriveSecretAESKey returned %d bytes, want 16", len(key))
+	if len(key) != 32 {
+		t.Errorf("deriveSecretAESKey returned %d bytes, want 32", len(key))
 	}
 }
 

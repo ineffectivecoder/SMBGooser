@@ -94,17 +94,31 @@ func (c *Client) EnumerateDomains() ([]string, error) {
 		return nil, fmt.Errorf("SamrEnumerateDomainsInSamServer failed: %w", err)
 	}
 
-	// Parse response - contains list of domain names
-	// Response: EnumerationContext(4) + Buffer(ptr) + CountReturned(4) + ErrorCode(4)
+	// Response format (same as EnumerateUsers):
+	// Offset 0:  DWORD EnumerationContext
+	// Offset 4:  Referent ID for Buffer pointer
+	// Offset 8:  DWORD CountReturned
+	// Offset 12: Referent ID for Buffer->Array pointer (deferred)
+	// Offset 16: DWORD EntriesRead
+	// Offset 20: Entry data...
+
 	var domains []string
-	if len(resp) < 16 {
+	if len(resp) < 20 {
 		return domains, nil
 	}
 
-	// Skip EnumerationContext
-	offset := 4
+	// Check return code at end
+	retCode := binary.LittleEndian.Uint32(resp[len(resp)-4:])
+	if retCode != 0 && retCode != 0x105 {
+		return domains, nil
+	}
 
-	// Check buffer pointer
+	offset := 0
+
+	// EnumerationContext
+	offset += 4
+
+	// Buffer pointer referent
 	bufferPtr := binary.LittleEndian.Uint32(resp[offset:])
 	offset += 4
 
@@ -116,50 +130,80 @@ func (c *Client) EnumerateDomains() ([]string, error) {
 	countReturned := binary.LittleEndian.Uint32(resp[offset:])
 	offset += 4
 
-	// Skip to buffer content (after error code check)
-	if countReturned > 0 && offset+8 < len(resp) {
-		// Parse SAMPR_ENUMERATION_BUFFER
-		entriesRead := binary.LittleEndian.Uint32(resp[offset:])
+	if countReturned == 0 {
+		return domains, nil
+	}
+
+	// Array pointer referent
+	offset += 4
+
+	// EntriesRead
+	entriesRead := binary.LittleEndian.Uint32(resp[offset:])
+	offset += 4
+
+	if entriesRead == 0 {
+		return domains, nil
+	}
+
+	// === FIRST PASS: Read entry headers ===
+	type entryHeader struct {
+		RelativeID uint32
+		Length     uint16
+		MaxLength  uint16
+		StrPtr     uint32
+	}
+
+	headers := make([]entryHeader, 0, entriesRead)
+	for i := uint32(0); i < entriesRead && offset+12 <= len(resp)-4; i++ {
+		relID := binary.LittleEndian.Uint32(resp[offset:])
 		offset += 4
 
-		// Array pointer
+		length := binary.LittleEndian.Uint16(resp[offset:])
+		offset += 2
+
+		maxLen := binary.LittleEndian.Uint16(resp[offset:])
+		offset += 2
+
+		strPtr := binary.LittleEndian.Uint32(resp[offset:])
 		offset += 4
 
-		// MaxCount
-		if offset+4 < len(resp) {
-			offset += 4
-		}
+		headers = append(headers, entryHeader{
+			RelativeID: relID,
+			Length:     length,
+			MaxLength:  maxLen,
+			StrPtr:     strPtr,
+		})
+	}
 
-		// Parse each entry: RelativeId (4) + RPC_UNICODE_STRING (8)
-		for i := uint32(0); i < entriesRead && offset+12 < len(resp)-4; i++ {
-			// Skip RelativeId (not used for domain names)
-			offset += 4
-
-			// RPC_UNICODE_STRING: Length(2) + MaxLen(2) + Ptr(4)
-			strLen := binary.LittleEndian.Uint16(resp[offset:])
-			offset += 8 // Skip Length + MaxLen + Ptr
-
-			if strLen == 0 {
-				domains = append(domains, "")
-			}
-		}
-
-		// Parse string data (deferred)
-		for i := uint32(0); i < entriesRead && offset < len(resp)-4; i++ {
-			// Conformant varying array: MaxCount(4) + Offset(4) + ActualCount(4) + Data
-			if offset+12 > len(resp)-4 {
+	// === SECOND PASS: Read string data ===
+	for _, h := range headers {
+		if h.StrPtr != 0 && h.Length > 0 {
+			// MaxCount
+			if offset+4 > len(resp)-4 {
 				break
 			}
+			offset += 4
 
-			// Skip MaxCount, Offset
-			offset += 8
+			// Offset
+			if offset+4 > len(resp)-4 {
+				break
+			}
+			offset += 4
 
+			// ActualCount
+			if offset+4 > len(resp)-4 {
+				break
+			}
 			actualCount := binary.LittleEndian.Uint32(resp[offset:])
 			offset += 4
 
-			// Read string data
+			// Read string bytes
 			strBytes := int(actualCount) * 2
-			if offset+strBytes <= len(resp)-4 {
+			if offset+strBytes > len(resp)-4 {
+				strBytes = len(resp) - 4 - offset
+			}
+
+			if strBytes > 0 && offset+strBytes <= len(resp) {
 				name := decodeUTF16LE(resp[offset : offset+strBytes])
 				domains = append(domains, name)
 				offset += strBytes

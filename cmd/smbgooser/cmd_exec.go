@@ -25,14 +25,16 @@ func cmdExec(ctx context.Context, args []string) error {
 
 	if len(args) < 1 {
 		fmt.Println("\nUsage: exec <command>")
-		fmt.Println("\nExecutes a command on the remote host by creating a temporary service.")
+		fmt.Println("\nExecutes a command on the remote host via Service Control Manager.")
+		fmt.Println("Runs as SYSTEM. Best for fire-and-forget commands.")
 		fmt.Println("Requires admin privileges on the target.")
 		fmt.Println("\nExamples:")
-		fmt.Println("  exec whoami")
 		fmt.Println("  exec \"net user hacker Password123! /add\"")
-		fmt.Println("  exec \"powershell -c \\\"Get-Process\\\"\"")
-		fmt.Println("\nNote: Output is not returned. Use file redirection to capture output:")
-		fmt.Println("  exec \"whoami > C:\\\\temp\\\\output.txt\"")
+		fmt.Println("  exec \"reg add HKLM\\...\"")
+		fmt.Println("  exec \"powershell -c Start-Process ...\"")
+		fmt.Println("\nNote: For commands requiring output capture, use 'atexec' instead:")
+		fmt.Println("  atexec whoami")
+		fmt.Println("  atexec \"dir C:\\Users\"")
 		fmt.Println()
 		return nil
 	}
@@ -40,8 +42,17 @@ func cmdExec(ctx context.Context, args []string) error {
 	// Join all args as the command
 	command := strings.Join(args, " ")
 
+	// Enable debug output if verbose mode
+	svcctl.Debug = verbose
+
 	info_("Creating SCMR client...")
-	svcClient, err := svcctl.NewClient(ctx, client)
+	creds := svcctl.Credentials{
+		Username: currentUser,
+		Password: currentPassword,
+		Hash:     currentHash,
+		Domain:   currentDomain,
+	}
+	svcClient, err := svcctl.NewClientWithCreds(ctx, client, creds)
 	if err != nil {
 		return fmt.Errorf("failed to create SCMR client: %w", err)
 	}
@@ -59,8 +70,8 @@ func cmdExec(ctx context.Context, args []string) error {
 		return fmt.Errorf("execution failed: %w", err)
 	}
 
-	success_("Command executed successfully")
-	info_("Note: Use file redirection to capture output (e.g., whoami > C:\\temp\\out.txt)")
+	success_("Command sent (fire-and-forget)")
+	info_("For output capture, use 'atexec' command instead")
 
 	return nil
 }

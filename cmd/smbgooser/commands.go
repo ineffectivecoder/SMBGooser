@@ -147,6 +147,28 @@ func cmdHelp(ctx context.Context, args []string) error {
 		return nil
 	}
 
+	// Show eventlog-specific help when in eventlog mode
+	if eventlogMode {
+		fmt.Println()
+		fmt.Printf("%s=== Event Log Virtual Filesystem ===%s\n\n", colorBold, colorReset)
+		fmt.Printf("%sNavigation:%s\n", colorCyan, colorReset)
+		fmt.Println("  ls                List logs (at root) or events (in log)")
+		fmt.Println("  cd <log>          Enter log (Security, System, Application)")
+		fmt.Println("  cd ..             Return to log list")
+		fmt.Println("  cat <id>          Show full details of event by record ID")
+		fmt.Println()
+		fmt.Printf("%sSearch:%s\n", colorCyan, colorReset)
+		fmt.Println("  find <pattern>    Search all logs for pattern")
+		fmt.Println("                    (matches event ID, source, or strings)")
+		fmt.Println()
+		fmt.Printf("%sOther:%s\n", colorCyan, colorReset)
+		fmt.Println("  disconnect        Exit eventlog mode")
+		fmt.Println("  help              Show this help")
+		fmt.Println("  exit              Exit SMBGooser")
+		fmt.Println()
+		return nil
+	}
+
 	// Show all commands grouped by category
 	fmt.Println()
 	fmt.Printf("%s=== SMBGooser Commands ===%s\n\n", colorBold, colorReset)
@@ -157,7 +179,7 @@ func cmdHelp(ctx context.Context, args []string) error {
 		"Files":     {"ls", "cd", "pwd", "cat", "get", "put", "mkdir", "rmdir", "rm", "find", "acl", "touch"},
 		"Pipes":     {"pipes", "rpc"},
 		"Coercion":  {"coerce", "discover"},
-		"Execution": {"exec", "atexec"},
+		"Execution": {"exec", "atexec", "ishell"},
 		"Registry":  {"reg"},
 		"Secrets":   {"secretsdump"},
 		"Services":  {"svc"},

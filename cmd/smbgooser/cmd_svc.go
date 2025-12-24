@@ -38,6 +38,8 @@ func cmdSvc(ctx context.Context, args []string) error {
 		return cmdSvcStart(ctx, args[1:])
 	case "stop":
 		return cmdSvcStop(ctx, args[1:])
+	case "delete":
+		return cmdSvcDelete(ctx, args[1:])
 	default:
 		printSvcHelp()
 		return nil
@@ -50,10 +52,12 @@ func printSvcHelp() {
 	fmt.Println("  query <service_name>    Query service status")
 	fmt.Println("  start <service_name>    Start a service")
 	fmt.Println("  stop <service_name>     Stop a service")
+	fmt.Println("  delete <service_name>   Delete a service")
 	fmt.Println("\nExamples:")
 	fmt.Println("  svc list")
 	fmt.Println("  svc query Spooler")
 	fmt.Println("  svc start RemoteRegistry")
+	fmt.Println("  svc delete smbg12345")
 	fmt.Println()
 }
 
@@ -95,7 +99,19 @@ func cmdSvcList(ctx context.Context, args []string) error {
 	for _, svc := range services {
 		state := svc.Status.CurrentState.String()
 		typeStr := svc.Status.ServiceType.String()
-		fmt.Printf("  %-40s %-15s %s\n", svc.ServiceName, state, typeStr)
+
+		// Color the state
+		stateColor := colorReset
+		switch svc.Status.CurrentState {
+		case svcctl.ServiceRunning:
+			stateColor = colorGreen
+		case svcctl.ServiceStopped:
+			stateColor = colorYellow
+		case svcctl.ServiceStartPending, svcctl.ServiceStopPending:
+			stateColor = colorCyan
+		}
+
+		fmt.Printf("  %-40s %s%-15s%s %s\n", svc.ServiceName, stateColor, state, colorReset, typeStr)
 	}
 	fmt.Println()
 
@@ -217,5 +233,41 @@ func cmdSvcStop(ctx context.Context, args []string) error {
 	} else {
 		success_("Stop command sent to: %s", serviceName)
 	}
+	return nil
+}
+
+// cmdSvcDelete deletes a service
+func cmdSvcDelete(ctx context.Context, args []string) error {
+	if len(args) < 1 {
+		fmt.Println("Usage: svc delete <service_name>")
+		return nil
+	}
+
+	serviceName := args[0]
+
+	info_("Connecting to Service Control Manager...")
+	svcClient, err := svcctl.NewClient(ctx, client)
+	if err != nil {
+		return fmt.Errorf("failed to create SCMR client: %w", err)
+	}
+	defer svcClient.Close()
+
+	if err := svcClient.OpenSCManager("", svcctl.SCManagerConnect); err != nil {
+		return fmt.Errorf("failed to open SCM: %w", err)
+	}
+
+	info_("Opening service: %s", serviceName)
+	handle, err := svcClient.OpenService(serviceName, svcctl.Delete|svcctl.ServiceQueryStatus)
+	if err != nil {
+		return fmt.Errorf("failed to open service: %w", err)
+	}
+	defer svcClient.CloseHandle(handle)
+
+	info_("Deleting service...")
+	if err := svcClient.DeleteService(handle); err != nil {
+		return fmt.Errorf("failed to delete service: %w", err)
+	}
+
+	success_("Service deleted: %s", serviceName)
 	return nil
 }

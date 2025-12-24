@@ -16,15 +16,13 @@ type Pipe struct {
 	name string
 }
 
-// Open opens a named pipe on the IPC$ share
+// Open opens a named pipe on the IPC$ share using standard pipe options
 func Open(ctx context.Context, tree *smb.Tree, pipeName string) (*Pipe, error) {
 	if !tree.IsPipe() {
 		return nil, fmt.Errorf("tree is not an IPC$ share")
 	}
 
-	// Named pipes need specific access flags (from jfjallid/go-smb reference)
-	// Default: FileReadData | FileReadEA | FileReadAttributes | ReadControl | Synchronize
-	// NOTE: goercer adds FileWriteData when it needs RPC write access
+	// Named pipes need specific access flags
 	access := types.FileReadData | types.FileWriteData |
 		types.FileReadEA | types.FileReadAttributes |
 		types.ReadControl | types.Synchronize
@@ -42,14 +40,40 @@ func Open(ctx context.Context, tree *smb.Tree, pipeName string) (*Pipe, error) {
 	}, nil
 }
 
+// OpenForRPC opens a named pipe for authenticated RPC (matches Impacket's openFile() exactly)
+// Critical: Uses ShareAccess=FileShareRead only, not FileShareRead|FileShareWrite|FileShareDelete
+func OpenForRPC(ctx context.Context, tree *smb.Tree, pipeName string) (*Pipe, error) {
+	if !tree.IsPipe() {
+		return nil, fmt.Errorf("tree is not an IPC$ share")
+	}
+
+	// Access flags matching Impacket's SMBConnection.openFile() defaults
+	// desiredAccess = FILE_READ_DATA | FILE_WRITE_DATA
+	access := types.FileReadData | types.FileWriteData
+
+	// Use OpenFileImpacket with ShareAccess=FileShareRead to match Impacket exactly
+	file, err := tree.OpenFileImpacket(ctx, pipeName, access, types.FileOpen)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open pipe %s: %w", pipeName, err)
+	}
+
+	return &Pipe{
+		file: file,
+		tree: tree,
+		name: pipeName,
+	}, nil
+}
+
 // Read reads data from the pipe
+// Named pipes MUST use offset 0, not tracked file offset!
 func (p *Pipe) Read(buf []byte) (int, error) {
-	return p.file.Read(buf)
+	return p.file.ReadAt(buf, 0)
 }
 
 // Write writes data to the pipe
+// Named pipes MUST use offset 0, not tracked file offset!
 func (p *Pipe) Write(data []byte) (int, error) {
-	return p.file.Write(data)
+	return p.file.WriteAt(data, 0)
 }
 
 // Transact performs a write followed by read (common for RPC)

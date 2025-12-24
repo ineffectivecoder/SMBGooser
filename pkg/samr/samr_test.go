@@ -8,9 +8,9 @@ import (
 func TestEncodeConnect(t *testing.T) {
 	stub := encodeConnect()
 
-	// Should have null pointer (4) + access mask (4) = 8 bytes
-	if len(stub) != 8 {
-		t.Errorf("encodeConnect returned %d bytes, want 8", len(stub))
+	// Should have null pointer (4) + access mask (4) + flags (4) = 12 bytes
+	if len(stub) != 12 {
+		t.Errorf("encodeConnect returned %d bytes, want 12", len(stub))
 	}
 }
 
@@ -71,10 +71,10 @@ func TestEncodeRpcUnicodeString(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		stub := encodeRpcUnicodeString(tt.input)
+		stub := encodeRpcUnicodeStringInline(tt.input)
 		// Should be 4-byte aligned
 		if len(stub)%4 != 0 {
-			t.Errorf("encodeRpcUnicodeString(%q) not 4-byte aligned: %d bytes", tt.input, len(stub))
+			t.Errorf("encodeRpcUnicodeStringInline(%q) not 4-byte aligned: %d bytes", tt.input, len(stub))
 		}
 	}
 }
@@ -151,6 +151,6 @@ func TestPasswordPolicyFormatters(t *testing.T) {
 // BenchmarkEncodeRpcUnicodeString benchmarks string encoding
 func BenchmarkEncodeRpcUnicodeString(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		encodeRpcUnicodeString("TESTDOMAIN")
+		encodeRpcUnicodeStringInline("TESTDOMAIN")
 	}
 }

@@ -7,6 +7,7 @@ import (
 )
 
 // Debug enables verbose output for troubleshooting
+// Note: This is set from debug.Verbose via cmd handlers
 var Debug bool
 
 // SVCCTL interface UUID: 367abb81-9844-35f1-ad32-98f038001003

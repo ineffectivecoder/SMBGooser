@@ -103,6 +103,22 @@ func NewCreatePipeRequest(name []byte, access AccessMask) *CreateRequest {
 	}
 }
 
+// NewCreateRequestImpacket creates a CREATE request with Impacket's exact openFile() parameters
+// Critical: ShareAccess=FileShareRead only (not FileShareRead|FileShareWrite|FileShareDelete)
+// This matches Impacket's smbconnection.py openFile() defaults
+func NewCreateRequestImpacket(name []byte, access AccessMask, disposition CreateDisposition) *CreateRequest {
+	return &CreateRequest{
+		StructureSize:      57,
+		ImpersonationLevel: ImpersonationImpersonation,
+		DesiredAccess:      access,
+		FileAttributes:     FileAttributeNormal,
+		ShareAccess:        FileShareRead, // KEY DIFFERENCE: Impacket uses only FileShareRead!
+		CreateDisposition:  disposition,
+		CreateOptions:      FileNonDirectoryFile,
+		Name:               name,
+	}
+}
+
 // Marshal serializes the CREATE request
 func (r *CreateRequest) Marshal() []byte {
 	// Fixed part: 56 bytes (StructureSize says 57, but last byte is Buffer[0])

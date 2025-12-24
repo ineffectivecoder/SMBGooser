@@ -42,7 +42,13 @@ func cmdAtexec(ctx context.Context, args []string) error {
 	command := strings.Join(args, " ")
 
 	info_("Creating Task Scheduler client...")
-	tschClient, err := tsch.NewClient(ctx, client)
+	creds := tsch.Credentials{
+		Username: currentUser,
+		Password: currentPassword,
+		Hash:     currentHash,
+		Domain:   currentDomain,
+	}
+	tschClient, err := tsch.NewClient(ctx, client, creds)
 	if err != nil {
 		return fmt.Errorf("failed to create TSCH client: %w", err)
 	}

@@ -21,6 +21,11 @@ func init() {
 
 // cmdFind searches for files matching a pattern
 func cmdFind(ctx context.Context, args []string) error {
+	// Handle eventlog mode - search event logs
+	if eventlogMode {
+		return cmdEventLogFind(ctx, args)
+	}
+
 	if currentTree == nil {
 		return fmt.Errorf("not connected to a share (use 'use <share>' first)")
 	}
