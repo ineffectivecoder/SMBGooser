@@ -174,14 +174,27 @@ func (c *Client) EnumValues(handle Handle) ([]RegistryValue, error) {
 
 		resp, err := c.rpc.Call(OpBaseRegEnumValue, stub)
 		if err != nil {
-			// ERROR_NO_MORE_ITEMS
+			if index == 0 {
+				return nil, fmt.Errorf("EnumValues RPC failed: %w", err)
+			}
 			break
 		}
 
 		val, err := parseEnumValueResponse(resp)
 		if err != nil {
-			// No more items or error
+			if index == 0 {
+				return nil, fmt.Errorf("parseEnumValueResponse failed: %w", err)
+			}
 			break
+		}
+
+		if val == nil {
+			break
+		}
+
+		// Empty name is the default value
+		if val.Name == "" {
+			val.Name = "(Default)"
 		}
 
 		values = append(values, *val)
@@ -199,11 +212,24 @@ func (c *Client) EnumKeys(handle Handle) ([]string, error) {
 
 		resp, err := c.rpc.Call(OpBaseRegEnumKey, stub)
 		if err != nil {
+			// Only break silently on ERROR_NO_MORE_ITEMS (0x103)
+			// For first iteration, this indicates a real problem
+			if index == 0 {
+				return nil, fmt.Errorf("EnumKeys RPC failed: %w", err)
+			}
 			break
 		}
 
 		keyName, err := parseEnumKeyResponse(resp)
 		if err != nil {
+			// Check if it's NO_MORE_ITEMS
+			if index == 0 {
+				return nil, fmt.Errorf("parseEnumKeyResponse failed: %w", err)
+			}
+			break
+		}
+
+		if keyName == "" {
 			break
 		}
 

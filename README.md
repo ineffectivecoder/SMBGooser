@@ -17,6 +17,7 @@
 ## Features
 
 - **SMB2/SMB3 Protocol Support** - Connect to modern Windows file shares
+- **SMB1 Protocol Support** - Connect to legacy Windows systems (XP, 2003)
 - **Multiple Authentication Methods**:
   - NTLM (password or pass-the-hash)
   - Kerberos (ccache/keytab)
@@ -30,6 +31,7 @@
 - **Service Enumeration** - List, query, and control Windows services
 - **User Enumeration** - Enumerate users and groups via SAMR
 - **Secrets Dumping** - Extract SAM hashes from remote machines
+- **Native LSASS Dumping** - Extract credentials from LSASS minidumps (no pypykatz)
 - **Coercion Attacks** - PetitPotam, SpoolSample, DFSCoerce, ShadowCoerce
 - **Discovery Tools** - Scan for new coercion methods via opnum enumeration
 - **Message Signing & Encryption** - Support for SMB3 encryption
@@ -63,6 +65,9 @@ export KRB5CCNAME=/path/to/ticket.ccache
 
 # With SOCKS5 proxy (pivoting)
 ./smbgooser -t 192.168.1.10 -u admin -p pass -s 127.0.0.1:1080
+
+# Force SMB1 for legacy systems (XP, 2003)
+./smbgooser -t 192.168.1.10 -u admin -p pass --smb1
 
 # Non-interactive: execute commands and exit
 ./smbgooser -t 192.168.1.10 -u admin -d DOMAIN -p pass -x 'sessions'
@@ -126,9 +131,20 @@ export KRB5CCNAME=/path/to/ticket.ccache
 
 | Command | Description |
 |---------|-------------|
+| `use reg` | Enter interactive registry VFS mode |
 | `reg query <key> [value]` | Query registry key/value |
 | `reg add <key> <value> <type> <data>` | Set registry value |
 | `reg delete <key> [value]` | Delete registry key/value |
+
+**Registry VFS Mode** (after `use reg`):
+
+| Command | Description |
+|---------|-------------|
+| `ls` | List subkeys and values |
+| `cd <key>` | Navigate into registry key |
+| `cat <value>` | Display full value details |
+| `pwd` | Show current registry path |
+| `disconnect` | Exit registry mode |
 
 ### Service Control
 
@@ -182,6 +198,39 @@ export KRB5CCNAME=/path/to/ticket.ccache
 [*] Connecting to remote registry...
 [*] Opening HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion...
     ProductName          REG_SZ          Windows 10 Pro
+```
+
+### Interactive Registry Navigation
+
+```
+[SMBGooser] 192.168.1.10> use reg
+[*] Connecting to Remote Registry service...
+[+] Connected to Remote Registry
+
+[Registry] 192.168.1.10> cd HKLM
+[Registry:HKLM] 192.168.1.10> cd SOFTWARE/Microsoft/"Windows NT"/CurrentVersion
+[Registry:HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion] 192.168.1.10> ls
+
+  Subkeys:
+    AppCompatFlags/
+    Drivers/
+    Image File Execution Options/
+    ...
+
+  Values:
+    NAME                      TYPE            DATA
+    -------------------------------------------------------
+    ProductName               REG_SZ          Windows Server Datacenter
+    CurrentBuild              REG_SZ          18362
+    CurrentVersion            REG_SZ          6.3
+
+[Registry:HKLM\...] 192.168.1.10> cat ProductName
+
+  Name:  ProductName
+  Type:  REG_SZ
+  Size:  52 bytes
+  Data:
+    Windows Server Datacenter
 ```
 
 ### Service Enumeration

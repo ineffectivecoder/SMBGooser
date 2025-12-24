@@ -17,6 +17,7 @@ import (
 
 	"github.com/ineffectivecoder/SMBGooser/pkg/auth"
 	"github.com/ineffectivecoder/SMBGooser/pkg/debug"
+	"github.com/ineffectivecoder/SMBGooser/pkg/rrp"
 	"github.com/ineffectivecoder/SMBGooser/pkg/smb"
 )
 
@@ -76,6 +77,11 @@ var (
 	// Event log virtual filesystem mode
 	eventlogMode bool   // true when "use eventlog" is active
 	eventlogPath string // "" = root, "Security"/"System"/"Application" = in log
+
+	// Registry virtual filesystem mode
+	registryMode   bool        // true when "use registry" is active
+	registryPath   string      // "" = root (hive selection), "HKLM\SOFTWARE" = in key
+	registryClient *rrp.Client // persistent RRP connection
 )
 
 func main() {
@@ -464,6 +470,11 @@ func completeInput(ctx context.Context, input string) []string {
 		return nil
 	}
 
+	// Special handling for cd in registry mode
+	if cmd == "cd" && registryMode {
+		return completeRegistryPaths(ctx, parts, input)
+	}
+
 	// Complete file paths for file commands
 	pathCommands := map[string]bool{
 		"ls": true, "dir": true, "cd": true, "cat": true, "type": true,
@@ -589,8 +600,8 @@ func completePaths(ctx context.Context, cmd, pathArg, fullInput string) []string
 
 // completeShares returns share completions
 func completeShares(prefix, fullInput string) []string {
-	// Common shares
-	shares := []string{"C$", "ADMIN$", "IPC$", "SYSVOL", "NETLOGON"}
+	// Common shares plus virtual filesystems
+	shares := []string{"C$", "ADMIN$", "IPC$", "SYSVOL", "NETLOGON", "eventlog", "registry"}
 	var matches []string
 	baseInput := strings.TrimSuffix(fullInput, prefix)
 
@@ -602,15 +613,71 @@ func completeShares(prefix, fullInput string) []string {
 	return matches
 }
 
+// completeRegistryPaths returns registry path completions
+func completeRegistryPaths(ctx context.Context, parts []string, input string) []string {
+	if registryClient == nil {
+		return nil
+	}
+
+	// At root - complete hives
+	if registryPath == "" {
+		hives := []string{"HKLM", "HKCU", "HKU", "HKCR", "HKCC", ".."}
+		if len(parts) == 1 && strings.HasSuffix(input, " ") {
+			return formatCompletions("cd", hives, "")
+		}
+		if len(parts) == 2 && !strings.HasSuffix(input, " ") {
+			prefix := strings.ToLower(parts[1])
+			return filterCompletions("cd", hives, prefix)
+		}
+		return nil
+	}
+
+	// In a key - complete subkeys
+	hive, subkey := parseRegistryPath(registryPath)
+	if hive == "" {
+		return nil
+	}
+
+	handle, err := registryClient.OpenKey(hive, subkey)
+	if err != nil {
+		return nil
+	}
+	defer registryClient.CloseKey(handle)
+
+	keys, err := registryClient.EnumKeys(handle)
+	if err != nil {
+		return nil
+	}
+
+	// Add ".." for going up
+	keys = append([]string{".."}, keys...)
+
+	if len(parts) == 1 && strings.HasSuffix(input, " ") {
+		return formatCompletions("cd", keys, "")
+	}
+	if len(parts) == 2 && !strings.HasSuffix(input, " ") {
+		prefix := strings.ToLower(parts[1])
+		return filterCompletions("cd", keys, prefix)
+	}
+
+	return nil
+}
+
 func buildPrompt() string {
 	var parts []string
 
-	// Show EventLog mode or normal mode
+	// Show mode indicator
 	if eventlogMode {
 		if eventlogPath != "" {
 			parts = append(parts, colorBold+"[EventLog:"+eventlogPath+"]"+colorReset)
 		} else {
 			parts = append(parts, colorBold+"[EventLog]"+colorReset)
+		}
+	} else if registryMode {
+		if registryPath != "" {
+			parts = append(parts, colorBold+"[Registry:"+registryPath+"]"+colorReset)
+		} else {
+			parts = append(parts, colorBold+"[Registry]"+colorReset)
 		}
 	} else {
 		parts = append(parts, colorBold+"[SMBGooser]"+colorReset)
@@ -618,7 +685,7 @@ func buildPrompt() string {
 
 	if targetHost != "" {
 		hostPart := colorCyan + targetHost + colorReset
-		if !eventlogMode && currentTree != nil {
+		if !eventlogMode && !registryMode && currentTree != nil {
 			hostPart += "/" + currentTree.ShareName()
 			if currentPath != "" {
 				hostPart += "/" + currentPath

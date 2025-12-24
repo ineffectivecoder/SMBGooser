@@ -81,7 +81,7 @@ func cmdShares(ctx context.Context, args []string) error {
 
 func cmdUse(ctx context.Context, args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: use <sharename|eventlog>")
+		return fmt.Errorf("usage: use <sharename|eventlog|registry>")
 	}
 
 	if session == nil {
@@ -90,16 +90,28 @@ func cmdUse(ctx context.Context, args []string) error {
 
 	shareName := args[0]
 
-	// Check for eventlog virtual filesystem
+	// Check for virtual filesystems
 	switch strings.ToLower(shareName) {
 	case "eventlog", "events", "evt", "logs":
 		return cmdUseEventLog(ctx, args)
+	case "registry", "reg":
+		return cmdUseRegistry(ctx, args)
 	}
 
 	// Exit eventlog mode if active
 	if eventlogMode {
 		eventlogMode = false
 		eventlogPath = ""
+	}
+
+	// Exit registry mode if active
+	if registryMode {
+		if registryClient != nil {
+			registryClient.Close()
+			registryClient = nil
+		}
+		registryMode = false
+		registryPath = ""
 	}
 
 	// Disconnect from current share if any
@@ -133,6 +145,11 @@ func cmdDisconnect(ctx context.Context, args []string) error {
 	// Handle eventlog mode
 	if eventlogMode {
 		return cmdEventLogDisconnect(ctx, args)
+	}
+
+	// Handle registry mode
+	if registryMode {
+		return cmdRegistryDisconnect(ctx, args)
 	}
 
 	if currentTree == nil {
@@ -226,6 +243,11 @@ func cmdLs(ctx context.Context, args []string) error {
 		return cmdEventLogLs(ctx, args)
 	}
 
+	// Handle registry mode
+	if registryMode {
+		return cmdRegistryLs(ctx, args)
+	}
+
 	if currentTree == nil {
 		return fmt.Errorf("not connected to a share (use 'use <share>' first)")
 	}
@@ -275,6 +297,11 @@ func cmdCd(ctx context.Context, args []string) error {
 		return cmdEventLogCd(ctx, args)
 	}
 
+	// Handle registry mode
+	if registryMode {
+		return cmdRegistryCd(ctx, args)
+	}
+
 	if currentTree == nil {
 		return fmt.Errorf("not connected to a share")
 	}
@@ -297,6 +324,11 @@ func cmdCd(ctx context.Context, args []string) error {
 }
 
 func cmdPwd(ctx context.Context, args []string) error {
+	// Handle registry mode
+	if registryMode {
+		return cmdRegistryPwd(ctx, args)
+	}
+
 	if currentTree == nil {
 		return fmt.Errorf("not connected to a share")
 	}
@@ -313,6 +345,11 @@ func cmdCat(ctx context.Context, args []string) error {
 	// Handle eventlog mode
 	if eventlogMode {
 		return cmdEventLogCat(ctx, args)
+	}
+
+	// Handle registry mode
+	if registryMode {
+		return cmdRegistryCat(ctx, args)
 	}
 
 	if currentTree == nil {

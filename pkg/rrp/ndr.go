@@ -59,95 +59,167 @@ func encodeOpenKey(parent Handle, subkey string, access uint32) []byte {
 }
 
 // encodeQueryValue encodes BaseRegQueryValue request
+// Structure: hKey, lpValueName, lpType, lpData, lpcbData, lpcbLen
+// Each pointer is followed immediately by its referent (interleaved layout)
 func encodeQueryValue(handle Handle, valueName string) []byte {
-	stub := make([]byte, 0, 256)
+	dataSize := uint32(512) // Buffer size for value data
 
-	// hKey
+	stub := make([]byte, 0, 128+int(dataSize))
+
+	// hKey (20 bytes)
 	stub = append(stub, handle[:]...)
 
-	// lpValueName (RPC_UNICODE_STRING)
-	stub = append(stub, encodeRpcUnicodeString(valueName)...)
+	// lpValueName (RRP_UNICODE_STRING) with inline referent
+	runes := []rune(valueName + "\x00")
+	utf16Chars := utf16.Encode(runes)
+	charCount := uint32(len(utf16Chars))
+	byteLen := charCount * 2
 
-	// lpType (pointer to DWORD) - non-null
-	stub = appendUint32(stub, 0x00020000)
-	stub = appendUint32(stub, 0) // placeholder
+	// RRP_UNICODE_STRING header
+	stub = appendUint16(stub, uint16(byteLen)) // Length
+	stub = appendUint16(stub, uint16(byteLen)) // MaximumLength
+	stub = appendUint32(stub, 0x00020000)      // Buffer pointer
 
-	// lpData (pointer) - non-null, we want data
+	// RRP_UNICODE_STRING referent (conformant varying array)
+	stub = appendUint32(stub, charCount) // MaxCount
+	stub = appendUint32(stub, 0)         // Offset
+	stub = appendUint32(stub, charCount) // ActualCount
+	for _, c := range utf16Chars {
+		stub = append(stub, byte(c), byte(c>>8))
+	}
+	// Align to 4 bytes
+	for len(stub)%4 != 0 {
+		stub = append(stub, 0xaa) // Use 0xaa like Impacket
+	}
+
+	// lpType (LPULONG) - pointer + referent
 	stub = appendUint32(stub, 0x00020004)
-	// lpcbData (size) - non-null
-	stub = appendUint32(stub, 0x00020008)
-	// lpcbLen
-	stub = appendUint32(stub, 0x0002000C)
+	stub = appendUint32(stub, 0) // lpType value = 0
 
-	// Max size for data (64KB)
-	stub = appendUint32(stub, 65536)
-	stub = appendUint32(stub, 0) // actual data will be returned
-	stub = appendUint32(stub, 65536)
-	stub = appendUint32(stub, 65536)
+	// lpData (PBYTE_ARRAY) - pointer + referent
+	stub = appendUint32(stub, 0x00020008)
+	stub = appendUint32(stub, dataSize) // MaxCount
+	stub = appendUint32(stub, 0)        // Offset
+	stub = appendUint32(stub, dataSize) // ActualCount
+	// Add buffer data (zeros)
+	for i := uint32(0); i < dataSize; i++ {
+		stub = append(stub, 0)
+	}
+
+	// lpcbData (LPULONG) - pointer + referent
+	stub = appendUint32(stub, 0x0002000C)
+	stub = appendUint32(stub, dataSize)
+
+	// lpcbLen (LPULONG) - pointer + referent
+	stub = appendUint32(stub, 0x00020010)
+	stub = appendUint32(stub, dataSize)
 
 	return stub
 }
 
 // encodeEnumValue encodes BaseRegEnumValue request
+// Structure per MS-RRP (interleaved pointers + referents):
+//
+//	hKey (RPC_HKEY - 20 bytes)
+//	dwIndex (DWORD)
+//	lpValueNameIn (RRP_UNICODE_STRING with buffer)
+//	lpType (LPULONG) - pointer + value
+//	lpData (PBYTE_ARRAY) - pointer + array
+//	lpcbData (LPULONG) - pointer + value
+//	lpcbLen (LPULONG) - pointer + value
 func encodeEnumValue(handle Handle, index uint32) []byte {
-	stub := make([]byte, 0, 128)
+	dataSize := uint32(512) // Buffer size
 
-	// hKey
+	stub := make([]byte, 0, 128+int(dataSize))
+
+	// hKey (20 bytes)
 	stub = append(stub, handle[:]...)
 
 	// dwIndex
 	stub = appendUint32(stub, index)
 
-	// lpValueNameIn (RPC_UNICODE_STRING) - buffer for name
-	stub = appendUint32(stub, 512)        // MaximumLength
-	stub = appendUint32(stub, 0)          // Length
-	stub = appendUint32(stub, 0x00020000) // pointer
-	// Conformant array
-	stub = appendUint32(stub, 256) // MaxCount
-	stub = appendUint32(stub, 0)   // Offset
-	stub = appendUint32(stub, 0)   // ActualCount
+	// lpValueNameIn (RRP_UNICODE_STRING) with inline referent
+	// Empty string input with buffer for output
+	maxLen := uint16(512)                 // buffer size for value name
+	stub = appendUint16(stub, 0)          // Length = 0
+	stub = appendUint16(stub, maxLen)     // MaximumLength
+	stub = appendUint32(stub, 0x00020000) // Buffer pointer
 
-	// lpType
+	// RRP_UNICODE_STRING referent (conformant varying array)
+	maxCount := uint32(maxLen / 2)      // Max chars
+	stub = appendUint32(stub, maxCount) // MaxCount
+	stub = appendUint32(stub, 0)        // Offset
+	stub = appendUint32(stub, 0)        // ActualCount = 0
+
+	// lpType (LPULONG) - pointer + value
 	stub = appendUint32(stub, 0x00020004)
-	stub = appendUint32(stub, 0)
+	stub = appendUint32(stub, 0) // Initial type = 0
 
-	// lpData
+	// lpData (PBYTE_ARRAY) - pointer + array
 	stub = appendUint32(stub, 0x00020008)
-	stub = appendUint32(stub, 0x0002000C)
+	stub = appendUint32(stub, dataSize) // MaxCount
+	stub = appendUint32(stub, 0)        // Offset
+	stub = appendUint32(stub, dataSize) // ActualCount
+	// Add buffer data
+	for i := uint32(0); i < dataSize; i++ {
+		stub = append(stub, 0)
+	}
 
-	stub = appendUint32(stub, 65536)
-	stub = appendUint32(stub, 0)
-	stub = appendUint32(stub, 65536)
-	stub = appendUint32(stub, 65536)
+	// lpcbData (LPULONG) - pointer + value
+	stub = appendUint32(stub, 0x0002000C)
+	stub = appendUint32(stub, dataSize)
+
+	// lpcbLen (LPULONG) - pointer + value
+	stub = appendUint32(stub, 0x00020010)
+	stub = appendUint32(stub, dataSize)
 
 	return stub
 }
 
 // encodeEnumKey encodes BaseRegEnumKey request
+// Structure per MS-RRP:
+//
+//	hKey (RPC_HKEY - 20 bytes)
+//	dwIndex (DWORD)
+//	lpNameIn (RRP_UNICODE_STRING with buffer)
+//	lpClassIn (PRRP_UNICODE_STRING - null pointer OK)
+//	lpftLastWriteTime (PFILETIME - some systems need non-null)
 func encodeEnumKey(handle Handle, index uint32) []byte {
 	stub := make([]byte, 0, 128)
 
-	// hKey
+	// hKey (20 bytes)
 	stub = append(stub, handle[:]...)
 
 	// dwIndex
 	stub = appendUint32(stub, index)
 
-	// lpNameIn (RRR_UNICODE_STRING) - buffer for name
-	stub = appendUint32(stub, 512)
-	stub = appendUint32(stub, 0)
-	stub = appendUint32(stub, 0x00020000)
-	stub = appendUint32(stub, 256)
-	stub = appendUint32(stub, 0)
-	stub = appendUint32(stub, 0)
+	// lpNameIn (RRP_UNICODE_STRING) - need to provide buffer for output
+	// Structure: Length (2) + MaximumLength (2) + Buffer pointer (4)
+	// Then pointer referent: MaxCount (4) + Offset (4) + ActualCount (4)
+	maxLen := uint16(512)                 // buffer size for key name (256 chars * 2 bytes)
+	stub = appendUint16(stub, 0)          // Length = 0 (empty input)
+	stub = appendUint16(stub, maxLen)     // MaximumLength = 512 bytes
+	stub = appendUint32(stub, 0x00020000) // Non-null buffer pointer
 
-	// lpClassIn (null)
-	stub = appendUint32(stub, 0)
-	stub = appendUint32(stub, 0)
-	stub = appendUint32(stub, 0)
+	// Buffer referent data (conformant varying array)
+	maxCount := uint32(maxLen / 2)      // Max chars
+	stub = appendUint32(stub, maxCount) // MaxCount
+	stub = appendUint32(stub, 0)        // Offset
+	stub = appendUint32(stub, 0)        // ActualCount = 0 (empty input)
 
-	// lpftLastWriteTime (null)
-	stub = appendUint32(stub, 0)
+	// lpClassIn (PRRP_UNICODE_STRING) - pointer to RRP_UNICODE_STRING
+	// Non-null pointer with empty string buffer (like Impacket does)
+	stub = appendUint32(stub, 0x00020004) // Non-null pointer
+	// Referent: Length (2) + MaxLen (2) + BufferPtr (4)
+	stub = appendUint16(stub, 0)  // Length = 0
+	stub = appendUint16(stub, 64) // MaxLen
+	stub = appendUint32(stub, 0)  // NULL buffer (no actual data needed)
+
+	// lpftLastWriteTime (PFILETIME) - non-null pointer
+	stub = appendUint32(stub, 0x00020008) // Non-null pointer
+	// Referent: FILETIME (8 bytes)
+	stub = appendUint32(stub, 0) // dwLowDateTime
+	stub = appendUint32(stub, 0) // dwHighDateTime
 
 	return stub
 }
@@ -351,6 +423,13 @@ func encodeRpcUnicodeString(s string) []byte {
 }
 
 // parseQueryValueResponse parses BaseRegQueryValue response
+// Response structure (interleaved pointers + referents):
+//
+//	lpType (LPULONG) - ptr + value
+//	lpData (PBYTE_ARRAY) - ptr + array (MaxCount, Offset, ActualCount, data)
+//	lpcbData (LPULONG) - ptr + value
+//	lpcbLen (LPULONG) - ptr + value
+//	ErrorCode (ULONG)
 func parseQueryValueResponse(name string, resp []byte) (*RegistryValue, error) {
 	if len(resp) < 4 {
 		return nil, nil
@@ -362,26 +441,43 @@ func parseQueryValueResponse(name string, resp []byte) (*RegistryValue, error) {
 		return nil, fmt.Errorf("query value failed: 0x%08X", retCode)
 	}
 
-	// Parse response - this is simplified
-	// Format: lpType, lpData, lpcbData, lpcbLen, retCode
-	if len(resp) < 20 {
-		return nil, nil
+	if len(resp) < 28 {
+		return nil, fmt.Errorf("response too short: %d bytes", len(resp))
 	}
 
-	// Type is at offset 0-4
-	valType := binary.LittleEndian.Uint32(resp[0:4])
+	offset := 0
 
-	// Find the data - skip type and pointers
-	// This is a simplified parser
-	dataStart := 4
-	if len(resp) > 12 {
-		dataLen := binary.LittleEndian.Uint32(resp[len(resp)-8 : len(resp)-4])
-		if int(dataLen) < len(resp)-12 {
-			dataStart = len(resp) - int(dataLen) - 8
-		}
+	// lpType (LPULONG): ptr + value
+	// ptr at offset, value at offset+4
+	offset += 4 // skip ptr
+	valType := binary.LittleEndian.Uint32(resp[offset : offset+4])
+	offset += 4
+
+	// lpData (PBYTE_ARRAY): ptr + MaxCount + Offset + ActualCount + data
+	offset += 4 // skip ptr
+	if len(resp) < offset+12 {
+		return nil, fmt.Errorf("response too short for lpData")
+	}
+	// maxCount := binary.LittleEndian.Uint32(resp[offset : offset+4])
+	offset += 4 // skip MaxCount
+	offset += 4 // skip Offset
+	actualCount := binary.LittleEndian.Uint32(resp[offset : offset+4])
+	offset += 4
+
+	// Read the data
+	if len(resp) < offset+int(actualCount) {
+		return nil, fmt.Errorf("response too short for data: need %d, have %d", offset+int(actualCount), len(resp))
+	}
+	data := make([]byte, actualCount)
+	copy(data, resp[offset:offset+int(actualCount)])
+	offset += int(actualCount)
+
+	// Align to 4 bytes
+	if offset%4 != 0 {
+		offset += 4 - (offset % 4)
 	}
 
-	data := resp[dataStart : len(resp)-4]
+	// lpcbData, lpcbLen, ErrorCode follow but we don't need them
 
 	return &RegistryValue{
 		Name: name,
@@ -391,6 +487,14 @@ func parseQueryValueResponse(name string, resp []byte) (*RegistryValue, error) {
 }
 
 // parseEnumValueResponse parses BaseRegEnumValue response
+// Response structure:
+//
+//	lpValueNameOut (RRP_UNICODE_STRING)
+//	lpType (LPULONG)
+//	lpData (PBYTE_ARRAY)
+//	lpcbData (LPULONG)
+//	lpcbLen (LPULONG)
+//	ErrorCode (ULONG)
 func parseEnumValueResponse(resp []byte) (*RegistryValue, error) {
 	if len(resp) < 4 {
 		return nil, fmt.Errorf("response too short")
@@ -401,12 +505,85 @@ func parseEnumValueResponse(resp []byte) (*RegistryValue, error) {
 		return nil, fmt.Errorf("enum value returned: 0x%08X", retCode)
 	}
 
-	// Simplified parsing - extract name and type
-	// The response format is complex, this is a basic implementation
+	if len(resp) < 28 {
+		return nil, fmt.Errorf("response too short for value data")
+	}
+
+	// Parse lpValueNameOut (RRP_UNICODE_STRING)
+	// Structure: Length (2) + MaxLen (2) + Ptr (4) + MaxCount (4) + Offset (4) + ActualCount (4) + StringData
+	nameLen := binary.LittleEndian.Uint16(resp[0:2])
+	// maxLen := binary.LittleEndian.Uint16(resp[2:4])
+	// ptr at 4:8
+
+	offset := 8 // After Length, MaxLen, Ptr
+
+	// Read conformant array header
+	if len(resp) < offset+12 {
+		return nil, fmt.Errorf("response too short for name array")
+	}
+	// maxCount := binary.LittleEndian.Uint32(resp[offset : offset+4])
+	// arrayOffset := binary.LittleEndian.Uint32(resp[offset+4 : offset+8])
+	actualCount := binary.LittleEndian.Uint32(resp[offset+8 : offset+12])
+	offset += 12
+
+	// Read value name
+	valueName := ""
+	if actualCount > 0 && nameLen > 0 {
+		stringBytes := int(actualCount) * 2
+		if len(resp) < offset+stringBytes {
+			return nil, fmt.Errorf("response too short for name string")
+		}
+
+		u16s := make([]uint16, actualCount)
+		for i := range u16s {
+			u16s[i] = binary.LittleEndian.Uint16(resp[offset+i*2:])
+		}
+		// Remove null terminator
+		for len(u16s) > 0 && u16s[len(u16s)-1] == 0 {
+			u16s = u16s[:len(u16s)-1]
+		}
+		valueName = string(utf16.Decode(u16s))
+		offset += stringBytes
+	}
+
+	// Align to 4 bytes
+	if offset%4 != 0 {
+		offset += 4 - (offset % 4)
+	}
+
+	// Parse lpType (pointer + value)
+	if len(resp) < offset+8 {
+		return nil, fmt.Errorf("response too short for type")
+	}
+	// Skip pointer
+	offset += 4
+	valueType := binary.LittleEndian.Uint32(resp[offset : offset+4])
+	offset += 4
+
+	// Parse lpData (PBYTE_ARRAY)
+	// Pointer + MaxCount + Offset + ActualCount + Data
+	if len(resp) < offset+16 {
+		return nil, fmt.Errorf("response too short for data header")
+	}
+	// Skip pointer
+	offset += 4
+	// dataMaxCount := binary.LittleEndian.Uint32(resp[offset : offset+4])
+	offset += 4 // skip MaxCount
+	offset += 4 // skip Offset
+	dataActualCount := binary.LittleEndian.Uint32(resp[offset : offset+4])
+	offset += 4
+
+	// Read data
+	var valueData []byte
+	if dataActualCount > 0 && len(resp) >= offset+int(dataActualCount) {
+		valueData = make([]byte, dataActualCount)
+		copy(valueData, resp[offset:offset+int(dataActualCount)])
+	}
+
 	return &RegistryValue{
-		Name: "value",
-		Type: RegSZ,
-		Data: nil,
+		Name: valueName,
+		Type: valueType,
+		Data: valueData,
 	}, nil
 }
 
@@ -421,15 +598,57 @@ func parseEnumKeyResponse(resp []byte) (string, error) {
 		return "", fmt.Errorf("enum key returned: 0x%08X", retCode)
 	}
 
-	// Extract key name from response
-	// The name is in RPC_UNICODE_STRING format
-	if len(resp) < 16 {
+	// BaseRegEnumKey response NDR layout:
+	// lpNameOut: RRP_UNICODE_STRING (Length [2] + MaxLen [2] + Ptr [4] + MaxCount [4] + Offset [4] + ActualCount [4] + StringData)
+	// lpClassOut: RRP_UNICODE_STRING (same structure)  - can be NULL
+	// lpftLastWriteTime: PFILETIME (pointer + optional 8 bytes)
+	// ReturnValue: DWORD
+
+	if len(resp) < 20 {
+		return "", fmt.Errorf("response too short for name")
+	}
+
+	// Parse lpNameOut (RRP_UNICODE_STRING)
+	length := binary.LittleEndian.Uint16(resp[0:2])
+	// maxLen at 2:4
+	// ptr at 4:8
+
+	if length == 0 {
 		return "", nil
 	}
 
-	// Skip first 4 bytes (Length, MaxLength), then read string
-	// This is simplified
-	return "subkey", nil
+	// After the header (8 bytes), we have the conformant array
+	// MaxCount (4) + Offset (4) + ActualCount (4) + StringData
+	if len(resp) < 20 {
+		return "", fmt.Errorf("response too short for string data")
+	}
+
+	actualCount := binary.LittleEndian.Uint32(resp[16:20])
+	if actualCount == 0 {
+		return "", nil
+	}
+
+	// String data starts at offset 20
+	stringDataStart := 20
+	stringDataLen := int(actualCount) * 2 // UTF-16LE
+
+	if len(resp) < stringDataStart+stringDataLen {
+		return "", fmt.Errorf("response too short for string content")
+	}
+
+	// Decode UTF-16LE string
+	stringData := resp[stringDataStart : stringDataStart+stringDataLen]
+	u16s := make([]uint16, actualCount)
+	for i := range u16s {
+		u16s[i] = binary.LittleEndian.Uint16(stringData[i*2:])
+	}
+
+	// Remove null terminator if present
+	for len(u16s) > 0 && u16s[len(u16s)-1] == 0 {
+		u16s = u16s[:len(u16s)-1]
+	}
+
+	return string(utf16.Decode(u16s)), nil
 }
 
 func appendUint32(buf []byte, val uint32) []byte {

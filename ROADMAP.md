@@ -109,7 +109,7 @@
 
 ### 🔧 Protocol Enhancements
 
-- [/] SMB1 Support - Package created (`pkg/smb/smb1/`), integration pending
+- [x] SMB1 Support - Package complete (`pkg/smb/smb1/`), CLI flag `--smb1` added
 - [ ] Multi-channel SMB3 - Faster transfers
 - [ ] Credit Management - Better handling for large transfers
 
@@ -122,6 +122,7 @@
 - [x] Event Log Clearing (`eventlog clear`) - Fixed! Works with device path format
 - [x] Event Log Backup (`eventlog backup`) - Fixed! Uses toDevicePath helper
 - [x] Event Log Writing (`eventlog write`) - Fixed! RPC method works, -schtask fallback
+- [x] Registry VFS (`use reg`) - Interactive directory-style registry navigation
 - [ ] Enhanced Event Log Viewer - Directory-style navigation, rendered details view
 - [ ] Alternate Data Streams (`ads`) - Hide data in NTFS ADS
 
