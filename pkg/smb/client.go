@@ -33,16 +33,19 @@ import (
 	"time"
 
 	"github.com/ineffectivecoder/SMBGooser/pkg/auth"
+	"github.com/ineffectivecoder/SMBGooser/pkg/smb/smb1"
 	"github.com/ineffectivecoder/SMBGooser/pkg/smb/types"
 )
 
-// Client represents an SMB2/SMB3 client
+// Client represents an SMB2/SMB3 client (with SMB1 fallback support)
 type Client struct {
-	config    ClientConfig
-	transport *Transport
-	session   *Session
-	negResult *NegotiateResult
-	ipcTree   *Tree // Cached IPC$ tree for RPC operations
+	config     ClientConfig
+	transport  *Transport
+	session    *Session
+	negResult  *NegotiateResult
+	ipcTree    *Tree        // Cached IPC$ tree for RPC operations
+	smb1Client *smb1.Client // SMB1 client (nil if using SMB2/3)
+	usingSmb1  bool         // True if connected via SMB1
 }
 
 // ClientConfig configures client behavior
@@ -52,6 +55,7 @@ type ClientConfig struct {
 	RequireSigning   bool
 	MaxCredits       uint16
 	Socks5URL        string // SOCKS5 proxy URL (e.g., "socks5://127.0.0.1:1080")
+	ForceSMB1        bool   // Force SMB1 mode for legacy systems
 }
 
 // DefaultClientConfig returns default client configuration
@@ -191,11 +195,22 @@ func (c *Client) NegotiateResult() *NegotiateResult {
 
 // IsConnected returns true if connected and authenticated
 func (c *Client) IsConnected() bool {
+	if c.usingSmb1 {
+		return c.smb1Client != nil
+	}
 	return c.session != nil && c.session.IsAuthenticated()
+}
+
+// IsSMB1 returns true if using SMB1 protocol
+func (c *Client) IsSMB1() bool {
+	return c.usingSmb1
 }
 
 // Dialect returns the negotiated dialect
 func (c *Client) Dialect() types.Dialect {
+	if c.usingSmb1 {
+		return 0 // SMB1 has no types.Dialect equivalent
+	}
 	if c.negResult != nil {
 		return c.negResult.Dialect
 	}
@@ -204,5 +219,13 @@ func (c *Client) Dialect() types.Dialect {
 
 // DialectName returns the negotiated dialect as a string
 func (c *Client) DialectName() string {
+	if c.usingSmb1 {
+		return "SMB 1.0 (NT LM 0.12)"
+	}
 	return DialectName(c.Dialect())
+}
+
+// SMB1Client returns the SMB1 client if in SMB1 mode, nil otherwise
+func (c *Client) SMB1Client() *smb1.Client {
+	return c.smb1Client
 }

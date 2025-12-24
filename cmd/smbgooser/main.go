@@ -80,17 +80,18 @@ var (
 
 func main() {
 	var (
-		target   string
-		username string
-		password string
-		hash     string
-		domain   string
-		ccache   string
-		keytab   string
-		pfxPath  string
-		pfxPass  string
-		socks5   string
-		execCmd  string
+		target    string
+		username  string
+		password  string
+		hash      string
+		domain    string
+		ccache    string
+		keytab    string
+		pfxPath   string
+		pfxPass   string
+		socks5    string
+		execCmd   string
+		forceSMB1 bool
 	)
 
 	// Configure CLI
@@ -112,6 +113,7 @@ func main() {
 	cli.Flag(&socks5, "s", "socks5", "", "SOCKS5 proxy (e.g., 127.0.0.1:1080 or user:pass@host:port)")
 	cli.Flag(&execCmd, "x", "exec", "", "Execute command(s) and exit (semicolon separated)")
 	cli.Flag(&verbose, "v", "verbose", false, "Verbose output")
+	cli.Flag(&forceSMB1, "1", "smb1", false, "Force SMB1 protocol (for legacy systems)")
 
 	cli.Parse()
 
@@ -171,6 +173,10 @@ func main() {
 		}
 		clientConfig.Socks5URL = socks5
 		info_("Using SOCKS5 proxy: %s", socks5)
+	}
+	if forceSMB1 {
+		clientConfig.ForceSMB1 = true
+		info_("Forcing SMB1 protocol mode")
 	}
 
 	info_("Connecting to %s...", target)

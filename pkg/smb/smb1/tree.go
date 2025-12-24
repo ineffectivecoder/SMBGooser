@@ -131,3 +131,99 @@ func (r *TreeConnectAndXResponse) Unmarshal(buf []byte) error {
 	// NativeFileSystem (Unicode null-terminated) - skip for now
 	return nil
 }
+
+// Tree represents an SMB1 tree (share) connection
+type Tree struct {
+	TID     uint16
+	Service string
+	client  *Client
+}
+
+// TreeDisconnect disconnects from a share
+func (c *Client) TreeDisconnect(tid uint16) error {
+	header := NewHeader(CommandTreeDisconnect, c.nextMID())
+	header.UID = c.uid
+	header.TID = tid
+
+	// SMB_COM_TREE_DISCONNECT has no parameters
+	// WordCount = 0, ByteCount = 0
+	params := []byte{0, 0, 0}
+
+	msg := append(header.Marshal(), params...)
+
+	resp, err := c.transport.SendRecv(msg)
+	if err != nil {
+		return fmt.Errorf("tree disconnect failed: %w", err)
+	}
+
+	var respHeader Header
+	if err := respHeader.Unmarshal(resp); err != nil {
+		return err
+	}
+
+	if !respHeader.IsSuccess() {
+		return fmt.Errorf("tree disconnect error: 0x%08X", respHeader.Status)
+	}
+
+	return nil
+}
+
+// TreeConnectFull connects to a share and returns a Tree object
+func (c *Client) TreeConnectFull(path string, service string) (*Tree, error) {
+	req := &TreeConnectAndXRequest{
+		Flags:       0x0008, // TREE_CONNECT_ANDX_DISCONNECT_TID
+		PasswordLen: 1,
+		Password:    []byte{0},
+		Path:        path,
+		Service:     service,
+	}
+
+	header := NewHeader(CommandTreeConnectAndX, c.nextMID())
+	header.UID = c.uid
+
+	headerBytes := header.Marshal()
+	reqBytes := req.Marshal()
+	msg := append(headerBytes, reqBytes...)
+
+	resp, err := c.transport.SendRecv(msg)
+	if err != nil {
+		return nil, fmt.Errorf("tree connect failed: %w", err)
+	}
+
+	var respHeader Header
+	if err := respHeader.Unmarshal(resp); err != nil {
+		return nil, fmt.Errorf("failed to parse response header: %w", err)
+	}
+
+	if !respHeader.IsSuccess() {
+		return nil, fmt.Errorf("tree connect error: 0x%08X", respHeader.Status)
+	}
+
+	var treeResp TreeConnectAndXResponse
+	if err := treeResp.Unmarshal(resp[HeaderSize:]); err != nil {
+		return nil, err
+	}
+
+	c.tid = respHeader.TID
+
+	return &Tree{
+		TID:     respHeader.TID,
+		Service: treeResp.Service,
+		client:  c,
+	}, nil
+}
+
+// CreateFile opens a file on this tree
+func (t *Tree) CreateFile(path string, desiredAccess, shareAccess, disposition, createOptions uint32) (*File, error) {
+	// Temporarily set the tree's TID
+	oldTID := t.client.tid
+	t.client.tid = t.TID
+	defer func() { t.client.tid = oldTID }()
+
+	return t.client.CreateFile(path, desiredAccess, shareAccess, disposition, createOptions)
+}
+
+// Disconnect disconnects from this tree
+func (t *Tree) Disconnect() error {
+	return t.client.TreeDisconnect(t.TID)
+}
