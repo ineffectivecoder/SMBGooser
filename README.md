@@ -91,7 +91,10 @@ export KRB5CCNAME=/path/to/ticket.ccache
 |---------|-------------|
 | `shares` | List available shares |
 | `use <share>` | Connect to a share |
-| `disconnect` | Disconnect from current share |
+| `use reg` | Enter interactive registry VFS mode |
+| `use eventlog` | Enter event log VFS mode |
+| `use coerce` | Enter coercion radar mode |
+| `disconnect` | Disconnect from current share/mode |
 | `shareaccess` | Check read/write access on shares |
 
 ### File Operations
@@ -102,11 +105,13 @@ export KRB5CCNAME=/path/to/ticket.ccache
 | `cd <path>` | Change directory |
 | `pwd` | Print working directory |
 | `cat <file>` | Display file contents |
-| `get <file>` | Download a file |
+| `get [-r] <file>` | Download a file or directory (`-r` for recursive) |
 | `put <local> <remote>` | Upload a file |
 | `mkdir <dir>` | Create directory |
+| `rmdir <dir>` | Remove directory |
 | `rm <file>` | Delete file |
 | `find <pattern>` | Search for files |
+| `touch <file>` | Modify file timestamps |
 
 ### Pipe & RPC Operations
 
@@ -126,6 +131,7 @@ export KRB5CCNAME=/path/to/ticket.ccache
 |---------|-------------|
 | `exec <command>` | Execute command via SCM (svcctl) |
 | `atexec <command>` | Execute command via Task Scheduler |
+| `ishell` | Interactive shell via ADS + Task Scheduler |
 
 ### Remote Registry
 
@@ -154,16 +160,28 @@ export KRB5CCNAME=/path/to/ticket.ccache
 | `svc query <name>` | Query service status |
 | `svc start <name>` | Start a service |
 | `svc stop <name>` | Stop a service |
+| `svc delete <name>` | Delete a service |
 
-### Secrets & Recon
+### Secrets & Extraction
 
 | Command | Description |
 |---------|-------------|
 | `secretsdump` | Dump SAM + LSA secrets (default) |
 | `secretsdump --sam-only` | Dump SAM hashes only |
 | `secretsdump --lsa-only` | Dump LSA secrets only |
+| `lsadump` | Dump LSASS memory & extract credentials |
+
+### Recon & Enumeration
+
+| Command | Description |
+|---------|-------------|
 | `users` | Enumerate domain users |
-| `users -g` | Enumerate domain groups |
+| `groups` | Enumerate domain groups |
+| `computers` | Enumerate domain computers |
+| `sessions` | Enumerate active sessions |
+| `loggedon` | Enumerate logged-on users |
+| `trusts` | Enumerate domain trusts |
+| `localadmins` | Enumerate local admin members |
 
 ### Coercion Attacks
 

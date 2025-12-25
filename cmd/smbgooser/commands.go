@@ -235,9 +235,9 @@ func cmdHelp(ctx context.Context, args []string) error {
 		"Coercion":  {"coerce", "discover"},
 		"Execution": {"exec", "atexec", "ishell"},
 		"Registry":  {"reg"},
-		"Secrets":   {"secretsdump"},
+		"Secrets":   {"secretsdump", "lsadump"},
 		"Services":  {"svc"},
-		"Recon":     {"users", "sessions", "loggedon", "trusts", "localadmins"},
+		"Recon":     {"users", "groups", "computers", "sessions", "loggedon", "trusts", "localadmins"},
 		"Advanced":  {"shadow", "gpo", "eventlog"},
 	}
 

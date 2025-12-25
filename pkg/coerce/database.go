@@ -27,6 +27,7 @@ type MethodInfo struct {
 	Opnum      uint16
 	Name       string
 	PathParams []PathParam    // Parameters that accept paths
+	StubType   StubType       // Expected stub layout for this method
 	Status     CoercionStatus // Confirmed, Candidate, Negative, Unknown
 	Notes      string         // Community notes or description
 }
